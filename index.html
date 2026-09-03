@@ -82,6 +82,15 @@
   .prog-bar{width:44px; height:6px; border-radius:3px; background:var(--border); overflow:hidden;}
   .prog-bar > div{height:100%; border-radius:3px;}
   .col-money{text-align:right; font-variant-numeric:tabular-nums;}
+  .editable-dur{cursor:text; border-radius:4px;}
+  .editable-dur:hover{background:var(--accent-dim, rgba(90,140,255,.14)); box-shadow:inset 0 0 0 1px var(--accent, #5a8cff);}
+  .dur-edit-input{width:38px; font-size:12.5px; font-family:inherit; padding:1px 3px; border:1px solid var(--accent, #5a8cff); border-radius:4px; background:var(--panel); color:var(--text);}
+  .task-name-text{cursor:text; border-radius:4px; padding:1px 3px; margin:-1px -3px;}
+  .task-name-text:hover{background:var(--accent-dim, rgba(90,140,255,.14)); box-shadow:inset 0 0 0 1px var(--accent, #5a8cff);}
+  .name-edit-input{width:100%; font-size:12.5px; font-family:inherit; padding:2px 4px; border:1px solid var(--accent, #5a8cff); border-radius:4px; background:var(--panel); color:var(--text);}
+  .editable-actid{cursor:text; border-radius:4px; font-variant-numeric:tabular-nums;}
+  .editable-actid:hover{background:var(--accent-dim, rgba(90,140,255,.14)); box-shadow:inset 0 0 0 1px var(--accent, #5a8cff);}
+  .code-edit-input{width:100%; font-size:12.5px; font-family:inherit; padding:1px 3px; border:1px solid var(--accent, #5a8cff); border-radius:4px; background:var(--panel); color:var(--text);}
   .diff-neg{color:var(--danger);}
   .diff-pos{color:var(--success);}
   .row-actions{white-space:nowrap; display:flex; align-items:center; gap:4px;}
@@ -191,6 +200,14 @@
   table.wbs-table thead th{cursor:grab; user-select:none;}
   table.wbs-table thead th.col-drag-over{box-shadow:inset 2px 0 0 var(--primary);}
   table.wbs-table thead th.col-dragging{opacity:.35;}
+  /* Excel-style column-width resize handle: a thin grab strip on the right edge of each header cell.
+     The <th> is already position:sticky (a positioned element), so this absolutely-positioned handle
+     sits relative to it without needing an extra wrapper. Kept fully INSIDE the <th>'s own box
+     (right:0, not a negative offset that spills into the next column) — every <th> shares the same
+     z-index, so same-z-index siblings paint in DOM order and the next column's <th> would otherwise
+     paint on top of (and swallow clicks meant for) any part of this handle that spilled past the edge. */
+  .col-resize-handle{position:absolute; right:0; top:0; width:6px; height:100%; cursor:col-resize; z-index:5; user-select:none;}
+  .col-resize-handle:hover{background:rgba(90,140,255,.35);}
   .col-panel-wrap{position:relative;}
   .col-panel{
     display:none; position:absolute; top:calc(100% + 6px); left:0; background:#fff; border:1px solid var(--border);
@@ -216,7 +233,7 @@
   <div class="stats" id="statCards"></div>
 
   <div class="toolbar">
-    <button class="btn primary" onclick="openAddModal()">＋ 新增任務</button>
+    <button class="btn primary" onclick="quickAddTask()">＋ 新增任務</button>
     <label class="toggle"><input type="checkbox" id="critOnly" onchange="render()"> 只顯示關鍵路徑</label>
     <div class="col-panel-wrap">
       <button class="btn" id="colPanelBtn" onclick="toggleColPanel(event)" title="勾選要顯示的欄位">☰ 欄位顯示</button>
@@ -234,7 +251,7 @@
       <button class="btn primary" onclick="chainLinkTasks()">依序建立相依關係</button>
       <button class="btn" onclick="clearChainSelect()">清除選取</button>
     </div>
-    <span class="hint" style="margin:0 0 0 4px">Ctrl(⌘)+點擊可依序多選任務 → 右鍵「依序建立相依關係」串成 FS 相依鏈</span>
+    <span class="hint" style="margin:0 0 0 4px">點第一個任務 → Ctrl(⌘)+點擊依序加入其他任務 → 右鍵「依序建立相依關係」串成 FS 相依鏈</span>
     <div class="spacer"></div>
     <div class="zoombtns" title="切換日期顯示的曆法">
       <button id="eraROC" class="active" onclick="setEra('roc')">民國</button>
@@ -337,8 +354,8 @@
 
 <div class="ctx-menu" id="ctxMenu" onclick="event.stopPropagation()">
   <button onclick="ctxEdit()">✎ 編輯任務</button>
-  <button onclick="ctxAddChild()">＋ 新增子任務</button>
   <button onclick="ctxAddSibling()">＋ 新增同層任務</button>
+  <button onclick="ctxAddChild()">＋ 新增子任務</button>
   <button onclick="ctxDuplicate()">⧉ 複製任務</button>
   <div class="ctx-sep"></div>
   <button onclick="ctxCut()">✂ 剪下</button>
@@ -366,8 +383,8 @@
       not recommended once the page is public).
    3. Until SHEET_API_URL is filled in, the page runs entirely offline on the built-in
       sample data below — nothing is lost, it just won't sync anywhere. */
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwaDvA-PAO0eTBNTv-1vkfPPnQu1LWCB4awcFYVcqgStAS3P6hVzM4Rkj34qlbxSwtH/exec';
-const API_TOKEN = '123456789';
+const SHEET_API_URL = 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE'; // e.g. https://script.google.com/macros/s/AKfycb.../exec
+const API_TOKEN = 'CHANGE_ME_SHARED_TOKEN';
 const SHEET_CONFIGURED = !!SHEET_API_URL && SHEET_API_URL.indexOf('PASTE_') !== 0;
 
 /* ---------- sample data (engineering project) ---------- */
@@ -422,21 +439,34 @@ let clipboardId = null; // task cut with Ctrl+X, waiting to be pasted
 let multiSelectIds = []; // ordered list of task ids built by Ctrl/Cmd+click, in click order — used to chain-link dependencies
 
 /* ---------- Google Sheet sync ----------
-   Only the editable "source of truth" fields are persisted (id/parent/name/duration/
-   responsible/budget/actual/progress/milestone/preds) — wbs, dates, ES/EF/LS/LF, float
-   and critical are all derived by computeSchedule() on every load, never stored. */
+   True inputs (id/parent/name/duration/responsible/budget/actual/progress/milestone/preds) are the
+   only fields that matter on load — everything else (wbs, ES/EF/LS/LF dates, float, diff, critical,
+   successor) is recomputed fresh by computeSchedule()/stripForSync() every time. The dates/float/diff/
+   successor ARE still written to the Google Sheet (as report-only columns, via stripForSync) so you can
+   see/export them there, but the app never reads them back as input — it always rebuilds them from
+   duration+preds+parent+budget+actual on load, overwriting whatever was in those cells. */
 function setSyncStatus(kind, text){
   const el = document.getElementById('syncStatus');
   if(!el) return;
   el.textContent = text;
   el.className = 'sync-status sync-' + kind;
 }
+function isoDate(d){ if(!d) return ''; const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; } // YYYY-MM-DD, calendar-toggle-independent — used for the Google Sheet's Early/Late Start/Finish date columns
 function stripForSync(t){
+  // successor is the reverse of preds (which tasks list this one as their predecessor) — computed
+  // fresh here rather than stored, same as everything else this function writes to the report columns
+  const successor = getSuccessors(t.id).map(x=>({id:x.task.id, type:x.type, lag:x.lag||0}));
   return {
-    id:t.id, parent:t.parent===undefined?null:t.parent, name:t.name||'',
+    id:t.id, code:t.code||String(t.id), parent:t.parent===undefined?null:t.parent, name:t.name||'',
     duration:t.duration, responsible:t.responsible||'', budget:t.budget||0,
     actual:t.actual||0, progress:t.progress||0, milestone:!!t.milestone,
     preds:(t.preds||[]).map(p=>({id:p.id, type:p.type, lag:p.lag||0})),
+    successor,
+    // report-only columns for the Google Sheet (P6-style Activity table) — the app never reads these
+    // back as input, it always recomputes the full schedule from duration+preds+parent on load
+    earlyStart:isoDate(t.startDate), earlyFinish:isoDate(t.endDate),
+    lateStart:isoDate(t.lateStartDate), lateFinish:isoDate(t.lateFinishDate),
+    float:t.float||0, diff:(t.budget||0)-(t.actual||0),
   };
 }
 let syncTimer = null;
@@ -487,21 +517,30 @@ async function loadFromSheet(){
 
 /* ---------- WBS table columns: order + visibility (drag to reorder, right-click to hide) ---------- */
 const COLUMN_META = {
-  wbs:      {label:'WBS',    width:42},
-  name:     {label:'任務名稱', width:205},
-  resp:     {label:'負責人',  width:72},
-  start:    {label:'開始',   width:76},
-  end:      {label:'結束',   width:76},
-  dur:      {label:'工期',   width:38},
-  float:    {label:'浮時',   width:48},
-  progress: {label:'進度',   width:82},
-  budget:   {label:'預算',   width:76},
-  actual:   {label:'實際',   width:76},
-  diff:     {label:'差異',   width:66},
+  actId:      {label:'Activity ID', width:56},
+  wbs:        {label:'WBS',    width:42},
+  name:       {label:'任務名稱', width:205},
+  resp:       {label:'負責人',  width:72},
+  start:      {label:'最早開始', width:80},
+  end:        {label:'最早完成', width:80},
+  lateStart:  {label:'最晚開始', width:80},
+  lateFinish: {label:'最晚完成', width:80},
+  dur:        {label:'工期',   width:38},
+  float:      {label:'浮時',   width:48},
+  progress:   {label:'進度',   width:82},
+  budget:     {label:'預算',   width:76},
+  actual:     {label:'實際',   width:76},
+  diff:       {label:'差異',   width:66},
+  pred:       {label:'前置任務', width:120},
+  succ:       {label:'後續任務', width:120},
+  parentRef:  {label:'上層任務(ID)', width:90},
+  milestoneFlag: {label:'里程碑', width:56},
 };
 const ACTIONS_COL_WIDTH = 126;
 let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden interleaved
-let columnHidden = {};                      // key -> true when hidden
+// parentRef / milestoneFlag are already visible another way (tree indentation / ◆ icon on the name),
+// so they start hidden to avoid clutter — everything else backend-side is shown by default.
+let columnHidden = { parentRef:true, milestoneFlag:true }; // key -> true when hidden
 function visibleColumns(){ return columnOrder.filter(k=>!columnHidden[k]); }
 
 /* ---------- date / workday helpers ---------- */
@@ -531,6 +570,8 @@ function setEra(e){
   render();
 }
 function money(n){ return Number(n||0).toLocaleString('en-US'); }
+function escAttr(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); } // safe to drop into an HTML attribute like an <input value="">
+
 
 /* ---------- arbitrary-depth WBS tree helpers ---------- */
 function hasKids(t){ return tasks.some(x=>x.parent===t.id); }
@@ -563,6 +604,20 @@ function ensureLeafDefaults(){
     if(t.actual===undefined) t.actual = 0;
     if(t.progress===undefined) t.progress = 0;
   });
+}
+// every task (leaf or summary) needs a user-facing "Activity ID" (`t.code`) — this is deliberately a
+// separate field from the internal `id` (which stays a stable auto-incrementing number used for ALL
+// internal bookkeeping: preds/successor/parent references, DOM element keys, event-handler arguments).
+// Keeping them separate means renaming a task's Activity ID can never break an existing relationship —
+// preds/successor/parent still point at the stable internal `id`; only the *displayed* text for those
+// relationships (predRefText/succRefText/the parentRef column) resolves through `t.code` at render time,
+// same as how Primavera P6 itself has an internal object id distinct from the editable Activity ID.
+// Any task without a code yet (brand-new task, a duplicated task — see duplicateTask(), or data loaded
+// from an older Google Sheet that predates this column) gets a default equal to its internal id, which
+// is guaranteed unique; the user can then rename it to any English-letter+digit code via a single click
+// on the "Activity ID" column (see startCodeEdit/commitCodeEdit).
+function ensureActivityCodes(){
+  tasks.forEach(t=>{ if(!t.code) t.code = String(t.id); });
 }
 // call BEFORE a task gains its first child. If it is currently a real leaf carrying its own
 // schedule/budget/predecessors, spin that data off into an auto-created child so nothing is lost,
@@ -630,6 +685,9 @@ function outdentTask(id){
 /* ---------- Ctrl/Cmd+click to build an ordered multi-select chain, then right-click to link them ---------- */
 function selectRow(id, e){
   if(e && (e.ctrlKey || e.metaKey)){
+    // if nothing's in the chain yet, seed it with whatever was already selected by a plain click —
+    // so the flow is "click task 1 normally, then Ctrl+click task 2" without needing Ctrl on task 1 too
+    if(multiSelectIds.length===0 && selectedId!=null && selectedId!==id) multiSelectIds.push(selectedId);
     const idx = multiSelectIds.indexOf(id);
     if(idx>=0) multiSelectIds.splice(idx,1); else multiSelectIds.push(id); // toggle, preserving click order
   } else {
@@ -751,6 +809,7 @@ document.addEventListener('keydown', function(e){
 function computeSchedule(){
   recomputeWbsNumbers();
   ensureLeafDefaults();
+  ensureActivityCodes();
   const byId = {}; tasks.forEach(t=>byId[t.id]=t);
   const leaves = tasks.filter(t=>!hasKids(t));
   const visited = {}; const order = [];
@@ -810,6 +869,11 @@ function computeSchedule(){
     t.critical = t.float <= 0;
     t.startDate = WORKDAYS[t.ES];
     t.endDate = WORKDAYS[Math.max(t.ES, t.EF-1)];
+    // late-start/late-finish as actual calendar dates (LS/LF above are workday-index numbers used
+    // for the float math) — kept mainly so the Google Sheet sync (v19) can show P6-style Early/Late
+    // Start/Finish date columns; not used anywhere else in the UI
+    t.lateStartDate = WORKDAYS[Math.max(0, t.LS)];
+    t.lateFinishDate = WORKDAYS[Math.max(t.LS, t.LF-1, 0)];
   });
 
   // summary rollups (bottom-up, arbitrary depth: a summary's children may themselves be summaries)
@@ -894,22 +958,51 @@ function predText(t){
     return `${pt?pt.wbs:'?'} ${p.type}${lagTxt}`;
   }).join('、');
 }
+// Activity-ID-based relationship text for the 前置任務/後續任務 table columns — deliberately keyed by
+// each task's user-facing Activity ID (t.code) rather than WBS number, since WBS numbers shift when
+// tasks are reordered/indented but Activity ID never does. Note the underlying reference in t.preds
+// still stores the stable internal `id`, not `code` — this text is resolved fresh on every render, so
+// renaming a task's Activity ID immediately shows up here without touching any other task's data.
+function predRefText(t){
+  if(!t.preds || !t.preds.length) return '';
+  return t.preds.map(p=>{
+    const pt = tasks.find(x=>x.id===p.id);
+    const lagTxt = p.lag ? (p.lag>0?`+${p.lag}`:`${p.lag}`) : '';
+    return `#${pt?pt.code:p.id}${pt?' '+pt.name:''} ${p.type}${lagTxt}`;
+  }).join('、');
+}
+function succRefText(t){
+  const list = getSuccessors(t.id);
+  if(!list.length) return '';
+  return list.map(x=>{
+    const lagTxt = x.lag ? (x.lag>0?`+${x.lag}`:`${x.lag}`) : '';
+    return `#${x.task.code} ${x.task.name} ${x.type}${lagTxt}`;
+  }).join('、');
+}
 
 // renders one <td> for a given column key + task row; kept in sync with renderTableHeader()'s
 // column list so header/body columns always line up regardless of current order/visibility
 function colTdHtml(key, t, isSum, depth, arrow, diff){
   switch(key){
+    case 'actId': return `<td class="editable-actid" onclick="startCodeEdit(event, ${t.id})" title="點一下可修改 Activity ID（限英文字母+數字組合，不能重複）；前置/後續任務、上層任務欄位都是用這個值顯示對應關係">${t.code}</td>`;
     case 'wbs': return `<td class="col-wbs">${t.wbs}</td>`;
     case 'name': {
       const chainIdx = multiSelectIds.indexOf(t.id);
       const chainBadge = chainIdx>=0 ? `<span class="chain-badge" title="Ctrl+點擊選取順序 ${chainIdx+1}">${chainIdx+1}</span>` : '';
-      const nameCell = `<span style="padding-left:${depth*15}px; display:inline-flex; align-items:center; gap:3px" title="${isSum?'':'前置任務: '+predText(t)}">${arrow}${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>`;
+      const nameText = `<span class="task-name-text" ondblclick="startNameEdit(event, ${t.id})" title="雙擊可直接改名">${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>`;
+      const nameCell = `<span style="padding-left:${depth*15}px; display:inline-flex; align-items:center; gap:3px" title="${isSum?'':'前置任務: '+predText(t)}">${arrow}${nameText}</span>`;
       return `<td class="col-name" title="${t.name}">${nameCell}${chainBadge}</td>`;
     }
     case 'resp': return `<td class="col-resp">${isSum?'':(t.responsible||'')}</td>`;
     case 'start': return `<td>${fmtROC(t.startDate)}</td>`;
     case 'end': return `<td>${fmtROC(t.endDate)}</td>`;
-    case 'dur': return `<td>${isSum?'':t.duration}</td>`;
+    case 'lateStart': return `<td>${t.lateStartDate?fmtROC(t.lateStartDate):''}</td>`;
+    case 'lateFinish': return `<td>${t.lateFinishDate?fmtROC(t.lateFinishDate):''}</td>`;
+    case 'dur': {
+      if(isSum) return '<td></td>';
+      if(t.milestone) return `<td title="里程碑工期固定為 1 天">${t.duration}</td>`; // fixed at 1, not directly editable
+      return `<td class="editable-dur" onclick="startDurEdit(event, ${t.id})" title="點一下可直接修改工期">${t.duration}</td>`;
+    }
     case 'float': {
       if(isSum) return '<td></td>';
       const f = t.float||0;
@@ -919,8 +1012,133 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'budget': return `<td class="col-money">${money(t.budget)}</td>`;
     case 'actual': return `<td class="col-money">${money(t.actual)}</td>`;
     case 'diff': return `<td class="col-money ${diff<0?'diff-neg':'diff-pos'}">${diff<0?'':'+'}${money(diff)}</td>`;
+    case 'pred': return `<td title="${predRefText(t)}">${predRefText(t)}</td>`;
+    case 'succ': return `<td title="${succRefText(t)}">${succRefText(t)}</td>`;
+    case 'parentRef': {
+      if(t.parent==null) return '<td></td>';
+      const pt = tasks.find(x=>x.id===t.parent);
+      return `<td>#${pt?pt.code:t.parent}</td>`;
+    }
+    case 'milestoneFlag': return `<td style="text-align:center">${t.milestone?'◆':''}</td>`;
     default: return '<td></td>';
   }
+}
+// quick inline editing for the 工期 (duration) cell — click straight into the number without
+// opening the full edit Modal. start/end 日期 are computed by CPM from duration+相依關係, so they
+// aren't directly editable here; duration is the one raw field that actually drives the schedule.
+function startDurEdit(e, id){
+  e.stopPropagation(); // don't let the click bubble up to the row's onclick (selectRow)
+  const t = tasks.find(x=>x.id===id);
+  if(!t || hasKids(t) || t.milestone) return;
+  const td = e.currentTarget;
+  td.innerHTML = `<input type="number" min="1" step="1" value="${t.duration}" class="dur-edit-input"
+    onclick="event.stopPropagation()" onblur="commitDurEdit(this,${id})" onkeydown="durEditKeydown(event,this,${id})">`;
+  const inp = td.querySelector('input');
+  inp.focus(); inp.select();
+}
+function durEditKeydown(e, input, id){
+  if(e.key==='Enter'){ input.blur(); } // triggers commitDurEdit via onblur
+  else if(e.key==='Escape'){ input.dataset.cancelled = '1'; input.blur(); }
+}
+function commitDurEdit(input, id){
+  if(input.dataset.cancelled==='1'){ render(); return; } // Esc pressed: discard, just redraw
+  const t = tasks.find(x=>x.id===id);
+  if(!t){ render(); return; }
+  const v = Math.max(1, Math.round(Number(input.value)) || t.duration);
+  if(v !== t.duration){ t.duration = v; render(); syncToSheet(); }
+  else { render(); }
+}
+// quick inline edit for Activity ID — single click straight into a text box, same affordance as the
+// 工期 cell (this column isn't needed for row selection, plenty of other cells serve that). Only
+// English letters + digits are allowed, and the value must be unique across all tasks (case-insensitive,
+// so "A1" and "a1" don't end up as two different-looking-but-effectively-identical codes) — since
+// predecessor/successor/parent references, and the Google Sheet's Predecessor/successor JSON, all
+// display this value. Invalid or duplicate input is rejected with an alert and reverted, same pattern
+// as commitNameEdit rejecting an empty name.
+function startCodeEdit(e, id){
+  e.stopPropagation();
+  const t = tasks.find(x=>x.id===id);
+  if(!t) return;
+  const td = e.currentTarget;
+  td.innerHTML = `<input type="text" value="${escAttr(t.code)}" class="code-edit-input"
+    onclick="event.stopPropagation()" onblur="commitCodeEdit(this,${id})" onkeydown="codeEditKeydown(event,this,${id})">`;
+  const inp = td.querySelector('input');
+  inp.focus(); inp.select();
+}
+function codeEditKeydown(e, input, id){
+  if(e.key==='Enter'){ input.blur(); } // triggers commitCodeEdit via onblur
+  else if(e.key==='Escape'){ input.dataset.cancelled = '1'; input.blur(); }
+}
+function commitCodeEdit(input, id){
+  if(input.dataset.cancelled==='1'){ render(); return; } // Esc pressed: discard, just redraw
+  const t = tasks.find(x=>x.id===id);
+  if(!t){ render(); return; }
+  const v = input.value.trim();
+  if(v === t.code){ render(); return; } // unchanged, nothing to validate or sync
+  if(!/^[A-Za-z0-9]+$/.test(v)){
+    alert('Activity ID 只能是英文字母＋數字的組合（不能有空格或符號），已還原成原本的值。');
+    render();
+    return;
+  }
+  const dup = tasks.some(x=>x.id!==id && (x.code||'').toLowerCase()===v.toLowerCase());
+  if(dup){
+    alert(`Activity ID「${v}」已經被其他任務使用了，請換一個。已還原成原本的值。`);
+    render();
+    return;
+  }
+  t.code = v;
+  render();
+  syncToSheet();
+}
+// quick inline rename — double-click a task's name straight into an editable text box, no need to
+// open the full edit Modal just to change a name. Works on both leaf tasks and summary rows.
+function startNameEdit(e, id){
+  e.stopPropagation();
+  const t = tasks.find(x=>x.id===id);
+  if(!t) return;
+  const td = e.currentTarget.closest('td.col-name');
+  if(!td) return;
+  td.innerHTML = `<input type="text" class="name-edit-input" value="${escAttr(t.name)}"
+    onclick="event.stopPropagation()" onblur="commitNameEdit(this,${id})" onkeydown="nameEditKeydown(event,this,${id})">`;
+  const inp = td.querySelector('input');
+  inp.focus(); inp.select();
+}
+function nameEditKeydown(e, input, id){
+  if(e.key==='Enter'){ input.blur(); } // triggers commitNameEdit via onblur
+  else if(e.key==='Escape'){ input.dataset.cancelled = '1'; input.blur(); }
+}
+function commitNameEdit(input, id){
+  if(input.dataset.cancelled==='1'){ render(); return; } // Esc pressed: discard, just redraw
+  const t = tasks.find(x=>x.id===id);
+  if(!t){ render(); return; }
+  const v = input.value.trim();
+  if(v && v!==t.name){ t.name = v; render(); syncToSheet(); }
+  else { render(); } // empty name is rejected — keep the old one rather than leaving a blank task
+}
+// adds a brand-new task directly into the table — no Modal — and immediately puts its name cell
+// into rename mode so the user can type the real name right away. Used by the toolbar "＋ 新增任務"
+// button and by the right-click "新增子任務"/"新增同層任務" menu items, replacing the old
+// openAddModal() flow for those three entry points (openEditModal's pencil icon is unchanged, since
+// that one is for editing an existing task's full details — duration/budget/predecessors etc).
+function quickAddTask(presetParent){
+  const parent = presetParent===undefined ? null : presetParent;
+  if(parent!==null){ const pt = tasks.find(x=>x.id===parent); if(pt) demoteToSummary(pt); }
+  const t = { id:nextId++, wbs:'', name:'新任務', parent, duration:1, preds:[], responsible:'', budget:0, actual:0, progress:0, milestone:false };
+  tasks.push(t);
+  if(parent!==null) collapsed[parent] = false; // auto-expand so the new child is visible
+  selectedId = t.id;
+  multiSelectIds = [];
+  render();
+  syncToSheet();
+  // wait a frame for the new <tr> to actually exist in the DOM, then jump straight into renaming it
+  requestAnimationFrame(()=>{
+    const td = document.querySelector(`tr[data-id="${t.id}"] td.col-name`);
+    if(!td) return;
+    td.innerHTML = `<input type="text" class="name-edit-input" value="${escAttr(t.name)}"
+      onclick="event.stopPropagation()" onblur="commitNameEdit(this,${t.id})" onkeydown="nameEditKeydown(event,this,${t.id})">`;
+    const inp = td.querySelector('input');
+    inp.focus(); inp.select();
+  });
 }
 function renderTableHeader(){
   const cols = visibleColumns();
@@ -929,7 +1147,7 @@ function renderTableHeader(){
     const m = COLUMN_META[k];
     return `<th style="width:${m.width}px" draggable="true"
       ondragstart="colDragStart(event,'${k}')" ondragover="colDragOver(event,'${k}')" ondragleave="colDragLeave(event)" ondrop="colDrop(event,'${k}')" ondragend="colDragEnd(event)"
-      oncontextmenu="showColMenu(event,'${k}')" title="拖曳可調整順序，右鍵可移動/隱藏">${m.label}</th>`;
+      oncontextmenu="showColMenu(event,'${k}')" title="拖曳表頭文字可調整順序，右鍵可移動/隱藏；拖曳最右邊的邊界可調整寬度">${m.label}<span class="col-resize-handle" draggable="false" ondragstart="event.preventDefault()" onmousedown="colResizeStart(event,'${k}')" onclick="event.stopPropagation()"></span></th>`;
   }).join('') + `<th style="width:${ACTIONS_COL_WIDTH}px"></th>`;
 }
 function updateTableWidth(){
@@ -955,7 +1173,7 @@ function renderTable(){
     const stateCls = `${t.id===selectedId?' selected-row':''}${t.id===clipboardId?' cut-row':''}${multiSelectIds.includes(t.id)?' chain-row':''}`;
     const tds = cols.map(k=>colTdHtml(k, t, isSum, depth, arrow, diff)).join('');
     return `
-      <tr class="${isSum?'summary-row':''} ${t.critical?'critical-row':''}${stateCls}" onclick="selectRow(${t.id}, event)" oncontextmenu="showContextMenu(event, ${t.id})">
+      <tr data-id="${t.id}" class="${isSum?'summary-row':''} ${t.critical?'critical-row':''}${stateCls}" onclick="selectRow(${t.id}, event)" oncontextmenu="showContextMenu(event, ${t.id})">
         ${tds}
         <td class="row-actions">
           <button class="icon-btn" onclick="event.stopPropagation(); openEditModal(${t.id})" title="編輯">✎</button>
@@ -969,6 +1187,12 @@ function renderTable(){
 /* ---------- column drag-to-reorder ---------- */
 let dragColKey = null;
 function colDragStart(e, key){
+  // a mousedown that started on the resize handle (see colResizeStart) sets this flag first — the
+  // resize handle isn't itself draggable, but the browser's native HTML5 drag-and-drop still walks up
+  // to the nearest draggable=true ancestor (the <th> itself) to pick a drag source, so this dragstart
+  // fires anyway unless we explicitly cancel it here. Canceling a dragstart event aborts the drag
+  // entirely (per spec), which is what actually stops the resize gesture from also reordering the column.
+  if(suppressColDrag){ e.preventDefault(); suppressColDrag = false; return; }
   dragColKey = key;
   e.dataTransfer.effectAllowed = 'move';
   try{ e.dataTransfer.setData('text/plain', key); }catch(err){}
@@ -994,6 +1218,43 @@ function colDrop(e, targetKey){
 function colDragEnd(e){
   dragColKey = null;
   document.querySelectorAll('.wbs-table thead th').forEach(th=>th.classList.remove('col-dragging','col-drag-over'));
+}
+
+/* ---------- column resize (Excel-style: drag the right edge of a header cell) ---------- */
+const MIN_COL_WIDTH = 28;
+let resizeCol = null, resizeTh = null, resizeStartX = 0, resizeStartWidth = 0;
+// consumed by colDragStart() — see the comment there for why this is needed even though the resize
+// handle itself has draggable="false"
+let suppressColDrag = false;
+function colResizeStart(e, key){
+  e.stopPropagation(); // don't let this mousedown also kick off the header's HTML5 drag-to-reorder
+  e.preventDefault();  // avoid text selection while dragging
+  suppressColDrag = true;
+  resizeCol = key;
+  resizeTh = e.currentTarget.closest('th');
+  resizeStartX = e.clientX;
+  resizeStartWidth = COLUMN_META[key].width;
+  document.addEventListener('mousemove', colResizeMove);
+  document.addEventListener('mouseup', colResizeEnd);
+}
+function colResizeMove(e){
+  if(resizeCol==null) return;
+  const w = Math.max(MIN_COL_WIDTH, resizeStartWidth + (e.clientX - resizeStartX));
+  COLUMN_META[resizeCol].width = w;
+  // live-update just the header cell + overall table width while dragging, without re-rendering the
+  // whole <tbody> on every mousemove — table-layout:fixed means <td>s follow the <th> widths
+  // automatically (see the CSS comment on .col-resize-handle), so nothing else needs to change here
+  if(resizeTh) resizeTh.style.width = w+'px';
+  updateTableWidth();
+}
+function colResizeEnd(){
+  resizeCol = null; resizeTh = null;
+  // normally already consumed by colDragStart, but reset defensively here too in case the mouse never
+  // moved enough to trigger a dragstart at all (e.g. a plain click on the handle) — otherwise a stuck
+  // `true` would silently swallow the next legitimate column-reorder drag
+  suppressColDrag = false;
+  document.removeEventListener('mousemove', colResizeMove);
+  document.removeEventListener('mouseup', colResizeEnd);
 }
 
 /* ---------- column right-click menu: move left/right, hide ---------- */
@@ -1488,7 +1749,9 @@ function duplicateTask(id){
   const clones = originals.map(t=>{
     const newId = nextId++;
     idMap[t.id] = newId;
-    return {...t, id:newId, wbs:'', preds:(t.preds||[]).map(p=>({...p}))};
+    // code:undefined (not the spread-in original code) — ensureActivityCodes() will default it to the
+    // new id, otherwise the clone would collide with the original's Activity ID
+    return {...t, id:newId, wbs:'', code:undefined, preds:(t.preds||[]).map(p=>({...p}))};
   });
   clones.forEach((c,i)=>{
     const orig = originals[i];
@@ -1541,8 +1804,8 @@ document.addEventListener('contextmenu', function(e){ if(!e.target.closest('.wbs
 document.addEventListener('scroll', hideContextMenu, true);
 window.addEventListener('resize', hideContextMenu);
 function ctxEdit(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) openEditModal(id); }
-function ctxAddChild(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) openAddModal(id); }
-function ctxAddSibling(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return; const t=tasks.find(x=>x.id===id); openAddModal(t?t.parent:null); }
+function ctxAddChild(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) quickAddTask(id); }
+function ctxAddSibling(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return; const t=tasks.find(x=>x.id===id); quickAddTask(t?t.parent:null); }
 function ctxDuplicate(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) duplicateTask(id); }
 function ctxCut(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return; selectedId=id; cutTask(); }
 function ctxPaste(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return; selectedId=id; pasteTask(); }
