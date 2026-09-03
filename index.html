@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工程專案時程管理 - P6/Project 簡易版</title>
+<style>
+  :root{
+    --primary:#2563eb; --primary-dark:#1d4ed8; --danger:#dc2626; --danger-bg:#fef2f2;
+    --success:#16a34a; --success-bg:#f0fdf4; --warning:#d97706; --warning-bg:#fffbeb;
+    --bg:#f1f5f9; --panel:#ffffff; --border:#e2e8f0; --border-dark:#cbd5e1;
+    --text:#1e293b; --text-dim:#64748b; --text-faint:#94a3b8;
+    --grey-bar:#cbd5e1; --grey-bar-fill:#94a3b8; --summary-bar:#334155;
+    --row-h:34px; --header-h:56px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Noto Sans TC",sans-serif;
+    font-size:13px;
+  }
+  .app{max-width:1500px; margin:0 auto; padding:20px 20px 40px;}
+
+  /* header */
+  .titlebar{display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:4px;}
+  .titlebar h1{font-size:20px; margin:0; font-weight:700;}
+  .titlebar .sub{color:var(--text-dim); font-size:12.5px;}
+  .badge-demo{display:inline-block; margin-left:8px; padding:2px 8px; border-radius:999px; background:#eef2ff; color:var(--primary-dark); font-size:11px; font-weight:600; vertical-align:middle;}
+
+  /* stat cards */
+  .stats{display:grid; grid-template-columns:repeat(7,1fr); gap:10px; margin:16px 0 18px;}
+  .stat{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:10px 12px;}
+  .stat .lbl{font-size:11px; color:var(--text-dim); margin-bottom:4px;}
+  .stat .val{font-size:16px; font-weight:700; color:var(--text);}
+  .stat .val.red{color:var(--danger);}
+  .stat .val.green{color:var(--success);}
+  .stat .sub2{font-size:10.5px; color:var(--text-faint); margin-top:2px;}
+  .progress-mini{height:5px; border-radius:3px; background:var(--border); margin-top:6px; overflow:hidden;}
+  .progress-mini > div{height:100%; background:var(--primary); border-radius:3px;}
+
+  /* toolbar */
+  .toolbar{display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;}
+  .btn{border:1px solid var(--border-dark); background:var(--panel); color:var(--text); padding:6px 12px; border-radius:8px; font-size:12.5px; cursor:pointer; font-weight:600;}
+  .btn:hover{background:#f8fafc;}
+  .btn.primary{background:var(--primary); border-color:var(--primary); color:#fff;}
+  .btn.primary:hover{background:var(--primary-dark);}
+  .toolbar .spacer{flex:1;}
+  .toggle{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-dim); cursor:pointer; user-select:none;}
+  .toggle input{accent-color:var(--danger);}
+  .zoombtns{display:flex; border:1px solid var(--border-dark); border-radius:8px; overflow:hidden;}
+  .zoombtns button{border:none; background:var(--panel); padding:6px 10px; font-size:12px; cursor:pointer; color:var(--text-dim); font-weight:600;}
+  .zoombtns button.active{background:var(--primary); color:#fff;}
+  .zoombtns button + button{border-left:1px solid var(--border-dark);}
+
+  /* main split panel */
+  .board{display:flex; background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.03);}
+  .wbs-panel{width:932px; flex:none; overflow:auto; max-height:620px; border-right:1px solid var(--border);}
+  .gantt-panel{flex:1; overflow:auto; max-height:620px; position:relative;}
+
+  table.wbs-table{border-collapse:collapse; width:932px; table-layout:fixed;}
+  table.wbs-table thead th{
+    position:sticky; top:0; background:#f8fafc; z-index:3; border-bottom:1px solid var(--border-dark);
+    text-align:left; padding:6px 8px; font-size:11px; color:var(--text-dim); font-weight:700; height:var(--header-h); white-space:nowrap;
+  }
+  table.wbs-table td{padding:0 8px; height:var(--row-h); border-bottom:1px solid #f1f5f9; white-space:nowrap; font-size:12.5px;}
+  table.wbs-table tbody tr:hover{background:#f8fafc;}
+  table.wbs-table tbody tr.critical-row td{background:var(--danger-bg);}
+  table.wbs-table tbody tr.summary-row td{font-weight:700; background:#f8fafc;}
+  table.wbs-table tbody tr{cursor:pointer;}
+  table.wbs-table tbody tr.chain-row td{background:#eef4ff !important; box-shadow:inset 0 0 0 1.5px #93c5fd;}
+  table.wbs-table tbody tr.selected-row td{background:#dbeafe !important; box-shadow:inset 0 0 0 1.5px var(--primary);}
+  table.wbs-table tbody tr.cut-row td{opacity:.5;}
+  table.wbs-table tbody tr.cut-row .col-name span{border-bottom:1px dashed var(--text-faint);}
+  .chain-badge{display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; margin-left:2px; border-radius:50%; background:var(--primary); color:#fff; font-size:9px; font-weight:700; vertical-align:middle; flex:none;}
+  .col-wbs{color:var(--text-faint); font-variant-numeric:tabular-nums; width:46px;}
+  .col-name{overflow:hidden; text-overflow:ellipsis;}
+  .indent1{padding-left:20px !important;}
+  .collapse-btn{display:inline-block; width:14px; cursor:pointer; color:var(--text-dim); font-size:10px;}
+  .col-resp{color:var(--text-dim);}
+  .col-progress{}
+  .prog-bar-wrap{display:flex; align-items:center; gap:6px;}
+  .prog-bar{width:44px; height:6px; border-radius:3px; background:var(--border); overflow:hidden;}
+  .prog-bar > div{height:100%; border-radius:3px;}
+  .col-money{text-align:right; font-variant-numeric:tabular-nums;}
+  .diff-neg{color:var(--danger);}
+  .diff-pos{color:var(--success);}
+  .row-actions{white-space:nowrap; display:flex; align-items:center; gap:4px;}
+  .icon-btn{border:none; background:transparent; cursor:pointer; color:var(--text-faint); font-size:13px; padding:6px 7px; border-radius:6px; vertical-align:middle; display:inline-flex; align-items:center; justify-content:center;}
+  .icon-btn svg{display:block;}
+  .icon-btn:hover{background:var(--border); color:var(--text);}
+  .icon-btn:disabled{opacity:.25; cursor:default;}
+  .icon-btn:disabled:hover{background:transparent; color:var(--text-faint);}
+  .milestone-tag{color:var(--warning);}
+
+  /* gantt */
+  .gantt-header{position:sticky; top:0; z-index:3; background:#f8fafc;}
+  .gantt-svg-wrap{position:relative;}
+  svg{display:block;}
+  .month-band{fill:#f8fafc;}
+  .month-band.alt{fill:#eef2f7;}
+  .grid-line{stroke:#eef1f5; stroke-width:1;}
+  .today-line{stroke:var(--primary); stroke-width:1.5; stroke-dasharray:3,3;}
+  .bar-track{fill:#f1f5f9;}
+  .bar-fill{}
+  .bar-outline-crit{stroke:var(--danger); stroke-width:1.6;}
+  .summary-bar-shape{fill:var(--summary-bar);}
+  .arrow-path{fill:none; stroke:#94a3b8; stroke-width:1.2;}
+  .arrow-path.crit{stroke:var(--danger); stroke-width:1.3;}
+  .axis-text{font-size:10.5px; fill:var(--text-dim); font-family:inherit;}
+  .month-text{font-size:11px; fill:var(--text); font-weight:700; font-family:inherit;}
+  .bar-label{font-size:10px; fill:#fff; font-family:inherit; pointer-events:none;}
+
+  /* legend */
+  .legend{display:flex; flex-wrap:wrap; gap:16px; margin-top:12px; font-size:11.5px; color:var(--text-dim); align-items:center;}
+  .legend .item{display:flex; align-items:center; gap:6px;}
+  .swatch{width:16px; height:10px; border-radius:2px; display:inline-block;}
+  .swatch.diamond{width:10px; height:10px; border-radius:2px; transform:rotate(45deg);}
+
+  /* modal */
+  .overlay{position:fixed; inset:0; background:rgba(15,23,42,.45); display:none; align-items:center; justify-content:center; z-index:50;}
+  .overlay.open{display:flex;}
+  .modal{background:#fff; border-radius:14px; width:460px; max-width:92vw; max-height:88vh; overflow:auto; padding:20px 22px; box-shadow:0 20px 50px rgba(0,0,0,.25);}
+  .modal h2{margin:0 0 14px; font-size:16px;}
+  .field{margin-bottom:12px;}
+  .field label{display:block; font-size:12px; font-weight:600; color:var(--text-dim); margin-bottom:4px;}
+  .field input[type=text], .field input[type=number], .field select{
+    width:100%; padding:7px 9px; border:1px solid var(--border-dark); border-radius:7px; font-size:13px; font-family:inherit; color:var(--text);
+  }
+  .field-row{display:flex; gap:10px;}
+  .field-row .field{flex:1;}
+  .pred-list{border:1px solid var(--border-dark); border-radius:7px; max-height:180px; overflow:auto; padding:6px 8px;}
+  .pred-row{padding:4px 0; border-bottom:1px dashed #f1f5f9;}
+  .pred-row:last-child{border-bottom:none;}
+  .pred-chk-label{display:flex; align-items:center; gap:6px; font-weight:400; font-size:12.5px; color:var(--text);}
+  .pred-detail{align-items:center; gap:6px; margin:4px 0 2px 22px;}
+  .pred-detail select{border:1px solid var(--border-dark); border-radius:6px; font-size:12px; padding:3px 5px; font-family:inherit;}
+  .pred-detail input[type=number]{width:72px; border:1px solid var(--border-dark); border-radius:6px; font-size:12px; padding:3px 6px; font-family:inherit;}
+  .modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:16px;}
+  .hint{font-size:11px; color:var(--text-faint); margin-top:3px;}
+  .checkline{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text);}
+
+  footer.note{margin-top:16px; font-size:11.5px; color:var(--text-faint); line-height:1.6;}
+
+  /* task relationship (predecessor/successor) detail panel */
+  .rel-panel{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 18px; margin-top:14px;}
+  .rel-panel h3{margin:0 0 4px; font-size:13.5px;}
+  .rel-sub{font-size:11.5px; color:var(--text-dim); margin-bottom:12px; line-height:1.5;}
+  .rel-cols{display:flex; gap:24px; flex-wrap:wrap;}
+  .rel-col{flex:1; min-width:240px;}
+  .rel-col h4{margin:0 0 8px; font-size:11.5px; color:var(--text-dim); font-weight:700;}
+  .rel-item{display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px; font-size:12.5px; background:#fafcff;}
+  .rel-item .rel-wbs{color:var(--text-faint); font-variant-numeric:tabular-nums; min-width:28px;}
+  .rel-item .rel-name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .rel-tag{font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:5px; background:#eef2ff; color:var(--primary-dark); white-space:nowrap;}
+  .rel-lag{font-size:11px; color:var(--text-dim); white-space:nowrap;}
+  .rel-lag.lead{color:var(--warning);}
+  .rel-empty{font-size:12px; color:var(--text-faint); padding:4px 0 2px;}
+
+  /* right-click context menu */
+  .ctx-menu{
+    display:none; position:fixed; z-index:60; background:#fff; border:1px solid var(--border);
+    border-radius:10px; box-shadow:0 10px 30px rgba(15,23,42,.18); padding:6px; min-width:180px;
+  }
+  .ctx-menu button{
+    display:block; width:100%; text-align:left; border:none; background:transparent; cursor:pointer;
+    padding:8px 10px; border-radius:6px; font-size:13px; font-family:inherit; color:var(--text);
+  }
+  .ctx-menu button:hover{background:#f1f5f9;}
+  .ctx-menu button.ctx-danger{color:var(--danger);}
+  .ctx-menu button.ctx-danger:hover{background:var(--danger-bg);}
+  .ctx-menu button:disabled{opacity:.35; cursor:default;}
+  .ctx-menu button:disabled:hover{background:transparent;}
+  .ctx-menu #ctxPasteBtn{display:none;}
+  .ctx-menu #ctxChainBtn{display:none;}
+
+  /* Google Sheet sync status */
+  .sync-status{display:inline-flex; align-items:center; gap:5px; font-size:11.5px; margin-top:2px;}
+  .sync-status::before{content:''; width:7px; height:7px; border-radius:50%; flex:none;}
+  .sync-status.sync-ok{color:var(--success);}
+  .sync-status.sync-ok::before{background:var(--success);}
+  .sync-status.sync-saving{color:var(--warning);}
+  .sync-status.sync-saving::before{background:var(--warning); animation:pulse 1s ease-in-out infinite;}
+  .sync-status.sync-error{color:var(--danger);}
+  .sync-status.sync-error::before{background:var(--danger);}
+  .sync-status.sync-offline{color:var(--text-faint);}
+  .sync-status.sync-offline::before{background:var(--text-faint);}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+  .ctx-sep{height:1px; background:var(--border); margin:5px 2px;}
+
+  /* draggable / hideable table columns */
+  table.wbs-table thead th{cursor:grab; user-select:none;}
+  table.wbs-table thead th.col-drag-over{box-shadow:inset 2px 0 0 var(--primary);}
+  table.wbs-table thead th.col-dragging{opacity:.35;}
+  .col-panel-wrap{position:relative;}
+  .col-panel{
+    display:none; position:absolute; top:calc(100% + 6px); left:0; background:#fff; border:1px solid var(--border);
+    border-radius:10px; box-shadow:0 10px 30px rgba(15,23,42,.18); padding:8px 10px; z-index:60; min-width:150px;
+  }
+  .col-panel label{display:flex; align-items:center; gap:7px; padding:4px 2px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="titlebar">
+    <div>
+      <h1>大安區OO商辦大樓新建工程 <span class="badge-demo">範例雛型</span></h1>
+      <div class="sub">專案時程 · 預算 · 負責人管理 — 簡易版 P6 / Project 工具</div>
+    </div>
+    <div style="text-align:right">
+      <div class="sub" id="metaLine"></div>
+      <div class="sync-status sync-offline" id="syncStatus">尚未連線</div>
+    </div>
+  </div>
+
+  <div class="stats" id="statCards"></div>
+
+  <div class="toolbar">
+    <button class="btn primary" onclick="openAddModal()">＋ 新增任務</button>
+    <label class="toggle"><input type="checkbox" id="critOnly" onchange="render()"> 只顯示關鍵路徑</label>
+    <div class="col-panel-wrap">
+      <button class="btn" id="colPanelBtn" onclick="toggleColPanel(event)" title="勾選要顯示的欄位">☰ 欄位顯示</button>
+      <div class="col-panel" id="colPanel" onclick="event.stopPropagation()"></div>
+    </div>
+    <span class="hint" style="margin:0">拖曳欄位標題可調整順序 · 右鍵欄位標題可移動/隱藏</span>
+    <div id="clipboardBar" style="display:none; align-items:center; gap:6px;">
+      <span id="clipboardLabel" class="hint" style="margin:0;"></span>
+      <button class="btn primary" onclick="pasteTask()">貼上到選取位置</button>
+      <button class="btn" onclick="cancelCut()">取消剪下</button>
+    </div>
+    <span class="hint" style="margin:0 0 0 4px">點一列任務選取 → Ctrl+X 剪下 → 點目標位置 → Ctrl+V 貼到它前面</span>
+    <div id="chainBar" style="display:none; align-items:center; gap:6px;">
+      <span id="chainLabel" class="hint" style="margin:0;"></span>
+      <button class="btn primary" onclick="chainLinkTasks()">依序建立相依關係</button>
+      <button class="btn" onclick="clearChainSelect()">清除選取</button>
+    </div>
+    <span class="hint" style="margin:0 0 0 4px">Ctrl(⌘)+點擊可依序多選任務 → 右鍵「依序建立相依關係」串成 FS 相依鏈</span>
+    <div class="spacer"></div>
+    <div class="zoombtns" title="切換日期顯示的曆法">
+      <button id="eraROC" class="active" onclick="setEra('roc')">民國</button>
+      <button id="eraAD" onclick="setEra('ad')">西元</button>
+    </div>
+    <div class="zoombtns">
+      <button id="zoomDay" onclick="setZoom('day')">日檢視</button>
+      <button id="zoomWeek" class="active" onclick="setZoom('week')">週檢視</button>
+      <button id="zoomMonth" onclick="setZoom('month')">月檢視</button>
+    </div>
+  </div>
+
+  <div class="board">
+    <div class="wbs-panel" id="wbsPanel">
+      <table class="wbs-table">
+        <thead>
+          <tr id="wbsHeadRow"></tr>
+        </thead>
+        <tbody id="wbsBody"></tbody>
+      </table>
+    </div>
+    <div class="gantt-panel" id="ganttPanel">
+      <div class="gantt-svg-wrap" id="ganttWrap"></div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="item"><span class="swatch" style="background:#94a3b8"></span> 未開始</div>
+    <div class="item"><span class="swatch" style="background:#3b82f6"></span> 進行中</div>
+    <div class="item"><span class="swatch" style="background:#16a34a"></span> 已完成</div>
+    <div class="item"><span class="swatch" style="background:transparent;border:1.6px solid #dc2626"></span> 關鍵路徑</div>
+    <div class="item"><span class="swatch diamond" style="background:#d97706"></span> 里程碑</div>
+    <div class="item"><span class="swatch" style="background:#334155"></span> 階段彙總</div>
+  </div>
+
+  <footer class="note">
+    範例資料僅供展示排程邏輯（關鍵路徑 CPM 演算法會自動依前置任務與工期重新計算）。工作日以週一至週五計算，不含例假日。點選「＋ 新增任務」可加入任務並即時重算時程與預算彙總。
+  </footer>
+
+  <div class="rel-panel" id="relPanel"></div>
+</div>
+
+<!-- modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h2 id="modalTitle">新增任務</h2>
+    <div class="field">
+      <label>任務名稱</label>
+      <input type="text" id="f_name" placeholder="例如：外牆帷幕安裝">
+    </div>
+    <div class="field">
+      <label>所屬上層任務（可任選任一現有任務作為上層，形成多層 WBS）</label>
+      <select id="f_parent" onchange="onFParentChange()"></select>
+    </div>
+    <div id="summaryNote" class="hint" style="display:none; margin:2px 0 12px; padding:8px 10px; background:#f8fafc; border:1px solid var(--border); border-radius:7px;">
+      此任務底下已有子任務，屬於彙總階層 — 時程、預算與進度會自動由子項目加總計算。若要輸入實際工期/預算，請改到子任務層級新增。
+    </div>
+    <div id="leafFields">
+      <div class="field-row">
+        <div class="field">
+          <label>負責人</label>
+          <input type="text" id="f_resp" list="respList" placeholder="選擇或輸入姓名">
+          <datalist id="respList"></datalist>
+        </div>
+        <div class="field">
+          <label>工期（工作天）</label>
+          <input type="number" id="f_dur" min="1" value="5">
+        </div>
+      </div>
+      <div class="field">
+        <label class="checkline"><input type="checkbox" id="f_milestone" onchange="onMilestoneToggle()"> 設為里程碑</label>
+      </div>
+      <div class="field">
+        <label>前置任務（可複選，並可分別設定關係類型與 Lag/Lead）</label>
+        <div class="hint" style="margin-bottom:5px">FS=完成才能開始・SS=同時開始・FF=同時完成・SF=前置開始後此任務才能結束；Lag 正數=延後幾天，負數=提前(Lead)</div>
+        <div class="pred-list" id="f_preds"></div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>預算（元）</label>
+          <input type="number" id="f_budget" min="0" value="0">
+        </div>
+        <div class="field">
+          <label>實際成本（元）</label>
+          <input type="number" id="f_actual" min="0" value="0">
+        </div>
+      </div>
+      <div class="field">
+        <label>完成進度：<span id="progVal">0</span>%</label>
+        <input type="range" id="f_progress" min="0" max="100" value="0" oninput="progVal.textContent=f_progress.value">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn" style="border-color:var(--danger); color:var(--danger); display:none" id="deleteBtn" onclick="deleteCurrent()">刪除任務</button>
+      <button class="btn primary" onclick="saveTask()">儲存</button>
+    </div>
+  </div>
+</div>
+
+<div class="ctx-menu" id="ctxMenu" onclick="event.stopPropagation()">
+  <button onclick="ctxEdit()">✎ 編輯任務</button>
+  <button onclick="ctxAddChild()">＋ 新增子任務</button>
+  <button onclick="ctxAddSibling()">＋ 新增同層任務</button>
+  <button onclick="ctxDuplicate()">⧉ 複製任務</button>
+  <div class="ctx-sep"></div>
+  <button onclick="ctxCut()">✂ 剪下</button>
+  <button id="ctxPasteBtn" onclick="ctxPaste()">貼上到這裡</button>
+  <div class="ctx-sep"></div>
+  <button id="ctxChainBtn" onclick="ctxChainLink()">🔗 依序建立相依關係（FS）</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-danger" onclick="ctxDelete()">刪除任務</button>
+</div>
+
+<div class="ctx-menu" id="colCtxMenu" onclick="event.stopPropagation()">
+  <button id="colMoveLeftBtn" onclick="colMoveLeft()">◀ 左移一欄</button>
+  <button id="colMoveRightBtn" onclick="colMoveRight()">右移一欄 ▶</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-danger" onclick="colHideCurrent()">隱藏此欄位</button>
+</div>
+
+<script>
+/* ---------- Google Sheet backend config ----------
+   1. Deploy the companion Apps Script (Code.gs) bound to a Google Sheet as a Web App
+      (Deploy > New deployment > Web app > Execute as: Me > Who has access: Anyone),
+      then paste its /exec URL below.
+   2. Set the same shared token in both this file and Code.gs's API_TOKEN constant
+      (or set both to '' to disable the token check entirely — fine for a private link,
+      not recommended once the page is public).
+   3. Until SHEET_API_URL is filled in, the page runs entirely offline on the built-in
+      sample data below — nothing is lost, it just won't sync anywhere. */
+const SHEET_API_URL = 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE'; // e.g. https://script.google.com/macros/s/AKfycb.../exec
+const API_TOKEN = 'CHANGE_ME_SHARED_TOKEN';
+const SHEET_CONFIGURED = !!SHEET_API_URL && SHEET_API_URL.indexOf('PASTE_') !== 0;
+
+/* ---------- sample data (engineering project) ---------- */
+/* preds: [{id, type: 'FS'|'SS'|'FF'|'SF', lag: workdays (negative = lead)}] */
+function fs(id, lag){ return {id, type:'FS', lag:lag||0}; }
+function ss(id, lag){ return {id, type:'SS', lag:lag||0}; }
+function ff(id, lag){ return {id, type:'FF', lag:lag||0}; }
+function sf(id, lag){ return {id, type:'SF', lag:lag||0}; }
+
+let nextId = 27;
+let tasks = [
+  {id:1, wbs:'1', name:'專案啟動', parent:null},
+  {id:2, wbs:'1.1', name:'專案啟動會議', parent:1, duration:2, preds:[], responsible:'王經理', budget:50000, actual:52000, progress:100},
+  {id:3, wbs:'1.2', name:'需求確認與範疇界定', parent:1, duration:3, preds:[fs(2)], responsible:'王經理', budget:80000, actual:78000, progress:100},
+
+  {id:4, wbs:'2', name:'設計階段', parent:null},
+  {id:5, wbs:'2.1', name:'建築設計', parent:4, duration:15, preds:[fs(3)], responsible:'陳建築師', budget:600000, actual:615000, progress:100},
+  {id:6, wbs:'2.2', name:'結構設計', parent:4, duration:12, preds:[fs(5)], responsible:'李結構技師', budget:450000, actual:360000, progress:80},
+  {id:7, wbs:'2.3', name:'機電設計', parent:4, duration:10, preds:[ss(5,5)], responsible:'林機電技師', budget:350000, actual:210000, progress:60},
+  {id:8, wbs:'2.4', name:'設計審查會議', parent:4, duration:1, preds:[fs(6),fs(7)], responsible:'王經理', budget:0, actual:0, progress:0, milestone:true},
+
+  {id:9, wbs:'3', name:'許可與發包', parent:null},
+  {id:10, wbs:'3.1', name:'建照申請', parent:9, duration:20, preds:[fs(8)], responsible:'王經理', budget:100000, actual:40000, progress:40},
+  {id:11, wbs:'3.2', name:'工程發包招標', parent:9, duration:15, preds:[fs(8)], responsible:'張採購', budget:50000, actual:15000, progress:30},
+
+  {id:12, wbs:'4', name:'基礎工程', parent:null},
+  {id:13, wbs:'4.1', name:'基地整地與開挖', parent:12, duration:10, preds:[fs(10),fs(11)], responsible:'吳工地主任', budget:800000, actual:0, progress:0},
+  {id:14, wbs:'4.2', name:'基礎鋼筋綁紮', parent:12, duration:8, preds:[fs(13)], responsible:'吳工地主任', budget:600000, actual:0, progress:0},
+  {id:15, wbs:'4.3', name:'基礎混凝土澆置', parent:12, duration:5, preds:[fs(14)], responsible:'吳工地主任', budget:500000, actual:0, progress:0},
+
+  {id:16, wbs:'5', name:'結構工程', parent:null},
+  {id:17, wbs:'5.1', name:'RC結構施工-地上層', parent:16, duration:40, preds:[fs(15)], responsible:'吳工地主任', budget:3500000, actual:0, progress:0},
+  {id:18, wbs:'5.2', name:'鋼構安裝', parent:16, duration:20, preds:[fs(17)], responsible:'周鋼構工程師', budget:1200000, actual:0, progress:0},
+
+  {id:19, wbs:'6', name:'機電與裝修工程', parent:null},
+  {id:20, wbs:'6.1', name:'機電管線配置', parent:19, duration:25, preds:[fs(18)], responsible:'林機電技師', budget:900000, actual:0, progress:0},
+  {id:21, wbs:'6.2', name:'內部裝修工程', parent:19, duration:30, preds:[ss(20,10)], responsible:'陳室內設計師', budget:1100000, actual:0, progress:0},
+  {id:22, wbs:'6.3', name:'外牆工程', parent:19, duration:25, preds:[ss(18,8)], responsible:'周鋼構工程師', budget:700000, actual:0, progress:0},
+
+  {id:23, wbs:'7', name:'驗收與移交', parent:null},
+  {id:24, wbs:'7.1', name:'竣工測試', parent:23, duration:10, preds:[fs(21),fs(22)], responsible:'王經理', budget:150000, actual:0, progress:0},
+  {id:25, wbs:'7.2', name:'使用執照申請', parent:23, duration:15, preds:[ff(24,5)], responsible:'王經理', budget:80000, actual:0, progress:0},
+  {id:26, wbs:'7.3', name:'專案結案與移交', parent:23, duration:1, preds:[fs(25)], responsible:'王經理', budget:0, actual:0, progress:0, milestone:true},
+];
+
+const PROJECT_START = new Date(2026, 8, 7); // 2026-09-07 (Mon)
+let zoom = 'week'; // 'week' | 'month'
+let collapsed = {}; // summaryId -> bool
+let editingId = null;
+let selectedId = null;  // currently clicked/selected task row
+let clipboardId = null; // task cut with Ctrl+X, waiting to be pasted
+let multiSelectIds = []; // ordered list of task ids built by Ctrl/Cmd+click, in click order — used to chain-link dependencies
+
+/* ---------- Google Sheet sync ----------
+   Only the editable "source of truth" fields are persisted (id/parent/name/duration/
+   responsible/budget/actual/progress/milestone/preds) — wbs, dates, ES/EF/LS/LF, float
+   and critical are all derived by computeSchedule() on every load, never stored. */
+function setSyncStatus(kind, text){
+  const el = document.getElementById('syncStatus');
+  if(!el) return;
+  el.textContent = text;
+  el.className = 'sync-status sync-' + kind;
+}
+function stripForSync(t){
+  return {
+    id:t.id, parent:t.parent===undefined?null:t.parent, name:t.name||'',
+    duration:t.duration, responsible:t.responsible||'', budget:t.budget||0,
+    actual:t.actual||0, progress:t.progress||0, milestone:!!t.milestone,
+    preds:(t.preds||[]).map(p=>({id:p.id, type:p.type, lag:p.lag||0})),
+  };
+}
+let syncTimer = null;
+// called after every function that actually mutates `tasks` (add/edit/delete/move/link) —
+// debounced so a burst of changes (e.g. deleting a subtree) only triggers one write
+function syncToSheet(){
+  if(!SHEET_CONFIGURED){ setSyncStatus('offline', '尚未設定 Google Sheet 連線（目前僅在本機記憶體中編輯，重新整理會遺失）'); return; }
+  setSyncStatus('saving', '同步中…');
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(doSync, 500);
+}
+function doSync(){
+  const payload = JSON.stringify({ token: API_TOKEN, tasks: tasks.map(stripForSync) });
+  // text/plain avoids a CORS preflight (OPTIONS) request, which Apps Script Web Apps don't handle —
+  // sending JSON as a plain-text body and parsing it server-side (JSON.parse(e.postData.contents)) is
+  // the standard workaround for POSTing to an Apps Script Web App from a page hosted elsewhere
+  fetch(SHEET_API_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: payload })
+    .then(r=>r.json())
+    .then(res=>{
+      if(res && res.ok) setSyncStatus('ok', '已同步到 Google Sheet');
+      else setSyncStatus('error', '同步失敗：' + (res && res.error || '未知錯誤'));
+    })
+    .catch(()=>{ setSyncStatus('error', '同步失敗（連不上 Google Sheet，可能是網路問題或部署設定）'); });
+}
+async function loadFromSheet(){
+  if(!SHEET_CONFIGURED){
+    setSyncStatus('offline', '尚未設定 Google Sheet 連線（目前顯示內建範例資料）');
+    render();
+    return;
+  }
+  setSyncStatus('saving', '從 Google Sheet 載入中…');
+  try{
+    const res = await fetch(SHEET_API_URL, { method:'GET' });
+    const data = await res.json();
+    if(Array.isArray(data) && data.length){
+      tasks = data;
+      nextId = Math.max(0, ...tasks.map(t=>t.id)) + 1;
+      collapsed = {}; selectedId = null; clipboardId = null; multiSelectIds = [];
+      setSyncStatus('ok', '已從 Google Sheet 載入');
+    } else {
+      setSyncStatus('offline', 'Google Sheet 目前是空的，先顯示內建範例資料（新增或編輯任務後會自動寫入）');
+    }
+  }catch(err){
+    setSyncStatus('error', '無法連線到 Google Sheet，目前顯示內建範例資料（離線模式）');
+  }
+  render();
+}
+
+/* ---------- WBS table columns: order + visibility (drag to reorder, right-click to hide) ---------- */
+const COLUMN_META = {
+  wbs:      {label:'WBS',    width:42},
+  name:     {label:'任務名稱', width:205},
+  resp:     {label:'負責人',  width:72},
+  start:    {label:'開始',   width:76},
+  end:      {label:'結束',   width:76},
+  dur:      {label:'工期',   width:38},
+  float:    {label:'浮時',   width:48},
+  progress: {label:'進度',   width:82},
+  budget:   {label:'預算',   width:76},
+  actual:   {label:'實際',   width:76},
+  diff:     {label:'差異',   width:66},
+};
+const ACTIONS_COL_WIDTH = 126;
+let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden interleaved
+let columnHidden = {};                      // key -> true when hidden
+function visibleColumns(){ return columnOrder.filter(k=>!columnHidden[k]); }
+
+/* ---------- date / workday helpers ---------- */
+function isWeekend(d){ const g=d.getDay(); return g===0||g===6; }
+function buildWorkdayList(startDate, count){
+  const list=[]; let d=new Date(startDate);
+  if(isWeekend(d)){ while(isWeekend(d)) d.setDate(d.getDate()+1); }
+  while(list.length<count){ if(!isWeekend(d)) list.push(new Date(d)); d.setDate(d.getDate()+1); }
+  return list;
+}
+const WORKDAYS = buildWorkdayList(PROJECT_START, 600);
+// dates can be displayed in either the ROC (Republic of China / Minguo) calendar or the
+// Gregorian (western/西元) calendar, toggled via the "民國 / 西元" buttons — setEra() below.
+// ROC year = Gregorian year - 1911 (e.g. 2026 -> 民國115年)
+let calendarMode = 'roc'; // 'roc' | 'ad'
+function toROCYear(y){ return y - 1911; }
+function eraYear(y){ return calendarMode==='roc' ? toROCYear(y) : y; }
+function eraLabel(){ return calendarMode==='roc' ? '民國' : '西元'; }
+function fmtDate(d){ return `${eraLabel()}${eraYear(d.getFullYear())}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`; }
+function fmtROC(d){ return `${eraYear(d.getFullYear())}/${d.getMonth()+1}/${d.getDate()}`; } // compact era-aware date, e.g. 115/9/7 or 2026/9/7 — used for table cells & stat cards
+function fmtShort(d){ return `${d.getMonth()+1}/${d.getDate()}`; } // month/day only — gantt axis tick labels (year already shown in the month band above)
+function fmtYM(d){ return `${eraYear(d.getFullYear())}/${d.getMonth()+1}`; }
+function setEra(e){
+  calendarMode = e;
+  document.getElementById('eraROC').classList.toggle('active', e==='roc');
+  document.getElementById('eraAD').classList.toggle('active', e==='ad');
+  render();
+}
+function money(n){ return Number(n||0).toLocaleString('en-US'); }
+
+/* ---------- arbitrary-depth WBS tree helpers ---------- */
+function hasKids(t){ return tasks.some(x=>x.parent===t.id); }
+function canIndentOf(t){ const sibs = tasks.filter(x=>x.parent===t.parent); return sibs.findIndex(x=>x.id===t.id) > 0; }
+function canOutdentOf(t){ return t.parent !== null; }
+const INDENT_ICON = `<svg viewBox="0 0 24 24" width="17" height="17"><path d="M3 5h18M3 19h18M11 12h10M3 8l4 4-4 4" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const OUTDENT_ICON = `<svg viewBox="0 0 24 24" width="17" height="17"><path d="M3 5h18M3 19h18M11 12h10M7 8l-4 4 4 4" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+function recomputeWbsNumbers(){
+  function walk(parentId, prefix){
+    tasks.filter(t=>t.parent===parentId).forEach((k,idx)=>{
+      k.wbs = prefix ? `${prefix}.${idx+1}` : `${idx+1}`;
+      walk(k.id, k.wbs);
+    });
+  }
+  walk(null, '');
+}
+function collectSubtree(id, set){
+  set.add(id);
+  tasks.filter(t=>t.parent===id).forEach(k=>collectSubtree(k.id, set));
+}
+// any task currently without children is treated as a leaf and must carry valid leaf fields —
+// this is the safety net for a task that reverts from summary back to leaf (its last child
+// outdented away) and never had these fields filled in to begin with
+function ensureLeafDefaults(){
+  tasks.filter(t=>!hasKids(t)).forEach(t=>{
+    if(t.duration===undefined) t.duration = 1;
+    if(t.preds===undefined) t.preds = [];
+    if(t.responsible===undefined) t.responsible = '';
+    if(t.budget===undefined) t.budget = 0;
+    if(t.actual===undefined) t.actual = 0;
+    if(t.progress===undefined) t.progress = 0;
+  });
+}
+// call BEFORE a task gains its first child. If it is currently a real leaf carrying its own
+// schedule/budget/predecessors, spin that data off into an auto-created child so nothing is lost,
+// and reroute any OTHER task's predecessor references (pointing at this id) to the new child —
+// otherwise a stale reference to a now-summary task would silently corrupt the CPM calculation.
+function demoteToSummary(t){
+  if(hasKids(t)) return null;
+  const hadRealData = (t.duration!==undefined) || (t.preds&&t.preds.length) || (t.budget) || (t.responsible);
+  if(!hadRealData) return null;
+  const clone = {
+    id: nextId++, wbs:'', name: t.name, parent: t.id,
+    duration: t.duration||1, preds: (t.preds||[]).map(p=>({...p})),
+    responsible: t.responsible||'', budget: t.budget||0, actual: t.actual||0,
+    progress: t.progress||0, milestone: t.milestone||false
+  };
+  tasks.push(clone);
+  tasks.forEach(x=>{
+    if(x.id!==clone.id && x.preds) x.preds.forEach(p=>{ if(p.id===t.id) p.id = clone.id; });
+  });
+  return clone;
+}
+// reposition `task` in the array so it lands right after the last element belonging to
+// anchorId's subtree — used so a freshly reparented task appears as anchor's last child
+// (indent) or as anchor's very next sibling (outdent), instead of at some arbitrary position
+function moveTaskAfterSubtree(task, anchorId){
+  const idx = tasks.indexOf(task);
+  if(idx>=0) tasks.splice(idx,1);
+  const inSubtree = new Set(); collectSubtree(anchorId, inSubtree);
+  let insertAt = tasks.length;
+  for(let i=tasks.length-1;i>=0;i--){ if(inSubtree.has(tasks[i].id)){ insertAt = i+1; break; } }
+  tasks.splice(insertAt, 0, task);
+}
+// like moveTaskAfterSubtree, but for placing a task as the LAST child of parentId (or at the very
+// end of the list when parentId is null / top-level) — used when the modal's parent dropdown is used to move a task
+function placeUnderParent(task, parentId){
+  const idx = tasks.indexOf(task);
+  if(idx>=0) tasks.splice(idx,1);
+  if(parentId===null){ tasks.push(task); return; }
+  moveTaskAfterSubtree(task, parentId);
+}
+function indentTask(id){
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  const siblings = tasks.filter(x=>x.parent===t.parent);
+  const idx = siblings.findIndex(x=>x.id===id);
+  if(idx<=0) return; // no preceding sibling to become a child of
+  const newParent = siblings[idx-1];
+  demoteToSummary(newParent);
+  t.parent = newParent.id;
+  moveTaskAfterSubtree(t, newParent.id);
+  collapsed[newParent.id] = false;
+  render();
+  syncToSheet();
+}
+function outdentTask(id){
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  if(t.parent===null) return; // already top-level
+  const oldParent = tasks.find(x=>x.id===t.parent);
+  t.parent = oldParent.parent;
+  moveTaskAfterSubtree(t, oldParent.id);
+  render();
+  syncToSheet();
+}
+
+/* ---------- click-to-select + Ctrl+X / Ctrl+V move (Project-style cut & paste) ---------- */
+/* ---------- Ctrl/Cmd+click to build an ordered multi-select chain, then right-click to link them ---------- */
+function selectRow(id, e){
+  if(e && (e.ctrlKey || e.metaKey)){
+    const idx = multiSelectIds.indexOf(id);
+    if(idx>=0) multiSelectIds.splice(idx,1); else multiSelectIds.push(id); // toggle, preserving click order
+  } else {
+    multiSelectIds = []; // a plain click starts a fresh single selection
+  }
+  selectedId = id;
+  renderTable();
+  updateClipboardBar();
+  updateChainBar();
+  renderRelPanel();
+}
+function updateChainBar(){
+  const bar = document.getElementById('chainBar');
+  if(!bar) return;
+  if(multiSelectIds.length < 2){ bar.style.display = 'none'; return; }
+  const names = multiSelectIds.map(id=>{ const t=tasks.find(x=>x.id===id); return t?t.name:'?'; });
+  bar.style.display = 'flex';
+  document.getElementById('chainLabel').textContent = `已選取 ${multiSelectIds.length} 個任務：${names.join(' → ')}`;
+}
+function clearChainSelect(){
+  multiSelectIds = [];
+  renderTable();
+  updateChainBar();
+}
+// true if `fromId`'s predecessor chain (direct or transitive) already includes `targetId` —
+// used to refuse a chain-link that would create a circular dependency
+function predDependsOn(fromId, targetId, seen){
+  seen = seen || new Set();
+  if(seen.has(fromId)) return false;
+  seen.add(fromId);
+  const t = tasks.find(x=>x.id===fromId);
+  if(!t || !t.preds) return false;
+  for(const p of t.preds){
+    if(p.id===targetId) return true;
+    if(predDependsOn(p.id, targetId, seen)) return true;
+  }
+  return false;
+}
+// links the tasks in multiSelectIds into a straight FS chain, in the order they were clicked:
+// task[1] gets task[0] as a predecessor, task[2] gets task[1], and so on. Existing predecessors
+// on each task are kept (this only adds/updates the one link to its immediate chain predecessor).
+function chainLinkTasks(){
+  if(multiSelectIds.length < 2) return;
+  const chain = multiSelectIds.map(id=>tasks.find(t=>t.id===id));
+  const badIdx = chain.findIndex(t=>!t || hasKids(t));
+  if(badIdx>=0){ alert('彙總階層（有子任務的階層列）不能設定相依關係，請只選明細任務再串聯。'); return; }
+  for(let i=1;i<chain.length;i++){
+    const t = chain[i], predId = chain[i-1].id;
+    if(predId===t.id) continue; // guards a same-task no-op, shouldn't normally happen
+    if(predDependsOn(predId, t.id)){
+      alert(`「${chain[i-1].name}」已經（直接或間接）依賴「${t.name}」，無法再串成相依關係，會形成循環。`);
+      return;
+    }
+    if(!t.preds) t.preds = [];
+    const existing = t.preds.find(p=>p.id===predId);
+    if(existing) existing.type = 'FS'; else t.preds.push({id:predId, type:'FS', lag:0});
+  }
+  const lastId = multiSelectIds[multiSelectIds.length-1];
+  multiSelectIds = [];
+  selectedId = lastId;
+  render();
+  updateChainBar();
+  syncToSheet();
+}
+function updateClipboardBar(){
+  const bar = document.getElementById('clipboardBar');
+  if(clipboardId==null){ bar.style.display = 'none'; return; }
+  const src = tasks.find(x=>x.id===clipboardId);
+  bar.style.display = 'flex';
+  document.getElementById('clipboardLabel').textContent = src ? `已剪下「${src.name}」，點一列目標任務再貼上` : '';
+}
+function cutTask(){
+  if(selectedId==null) return;
+  clipboardId = selectedId;
+  renderTable();
+  updateClipboardBar();
+  renderRelPanel();
+}
+function cancelCut(){
+  clipboardId = null;
+  renderTable();
+  updateClipboardBar();
+}
+function pasteTask(){
+  if(clipboardId==null || selectedId==null) return;
+  if(clipboardId===selectedId){ return; } // pasting onto itself: no-op
+  const cutSet = new Set(); collectSubtree(clipboardId, cutSet);
+  if(cutSet.has(selectedId)){ alert('不能把任務貼到它自己底下的子任務裡面。'); return; }
+  const src = tasks.find(x=>x.id===clipboardId);
+  const target = tasks.find(x=>x.id===selectedId);
+  if(!src || !target) return;
+  src.parent = target.parent;
+  const idx = tasks.indexOf(src);
+  if(idx>=0) tasks.splice(idx,1);
+  const targetIdx = tasks.indexOf(target); // insert right before the target row
+  tasks.splice(targetIdx, 0, src);
+  clipboardId = null;
+  selectedId = src.id;
+  render();
+  updateClipboardBar();
+  syncToSheet();
+}
+document.addEventListener('keydown', function(e){
+  const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+  if(tag==='input' || tag==='select' || tag==='textarea') return; // don't hijack normal text editing
+  if(document.getElementById('overlay').classList.contains('open')) return; // modal open, ignore
+  const key = e.key.toLowerCase();
+  if((e.ctrlKey||e.metaKey) && key==='x'){
+    if(selectedId!=null){ e.preventDefault(); cutTask(); }
+  } else if((e.ctrlKey||e.metaKey) && key==='v'){
+    if(clipboardId!=null && selectedId!=null){ e.preventDefault(); pasteTask(); }
+  } else if(e.key==='Escape' && (clipboardId!=null || multiSelectIds.length)){
+    if(clipboardId!=null) cancelCut();
+    if(multiSelectIds.length) clearChainSelect();
+  }
+});
+
+/* ---------- CPM schedule (supports FS / SS / FF / SF + lag) ---------- */
+function computeSchedule(){
+  recomputeWbsNumbers();
+  ensureLeafDefaults();
+  const byId = {}; tasks.forEach(t=>byId[t.id]=t);
+  const leaves = tasks.filter(t=>!hasKids(t));
+  const visited = {}; const order = [];
+  function visit(t){
+    if(visited[t.id]) return; visited[t.id]=true;
+    (t.preds||[]).forEach(p=>{ if(byId[p.id]) visit(byId[p.id]); });
+    order.push(t);
+  }
+  leaves.forEach(visit);
+
+  // forward pass: unify every relationship type into a constraint on ES
+  order.forEach(t=>{
+    let es = 0;
+    (t.preds||[]).forEach(p=>{
+      const pred = byId[p.id]; if(!pred) return;
+      const lag = p.lag||0;
+      let c;
+      switch(p.type){
+        case 'SS': c = pred.ES + lag; break;
+        case 'FF': c = pred.EF + lag - t.duration; break;
+        case 'SF': c = pred.ES + lag - t.duration; break;
+        default:   c = pred.EF + lag; // FS
+      }
+      es = Math.max(es, c);
+    });
+    t.ES = Math.max(0, es);
+    t.EF = t.ES + t.duration;
+  });
+  const projectDuration = Math.max(0, ...order.map(t=>t.EF));
+
+  // successor links (with type/lag) for the backward pass
+  const succLinks = {}; order.forEach(t=>succLinks[t.id]=[]);
+  order.forEach(t=>(t.preds||[]).forEach(p=>{ if(succLinks[p.id]) succLinks[p.id].push({succ:t, type:p.type, lag:p.lag||0}); }));
+
+  // backward pass: unify every relationship type into a constraint on LF
+  [...order].reverse().forEach(t=>{
+    const links = succLinks[t.id];
+    let lf;
+    if(!links.length){ lf = projectDuration; }
+    else {
+      lf = Infinity;
+      links.forEach(l=>{
+        const s = l.succ, lag = l.lag;
+        let c;
+        switch(l.type){
+          case 'SS': c = s.LS - lag + t.duration; break;
+          case 'FF': c = s.LF - lag; break;
+          case 'SF': c = s.LF - lag + t.duration; break;
+          default:   c = s.LS - lag; // FS
+        }
+        lf = Math.min(lf, c);
+      });
+    }
+    t.LF = lf;
+    t.LS = t.LF - t.duration;
+    t.float = t.LS - t.ES;
+    t.critical = t.float <= 0;
+    t.startDate = WORKDAYS[t.ES];
+    t.endDate = WORKDAYS[Math.max(t.ES, t.EF-1)];
+  });
+
+  // summary rollups (bottom-up, arbitrary depth: a summary's children may themselves be summaries)
+  function rollup(s){
+    const kids = tasks.filter(t=>t.parent===s.id);
+    if(!kids.length) return; // leaf: schedule already set by CPM above
+    kids.forEach(k=>{ if(hasKids(k)) rollup(k); });
+    s.startDate = new Date(Math.min(...kids.map(k=>k.startDate.getTime())));
+    s.endDate = new Date(Math.max(...kids.map(k=>k.endDate.getTime())));
+    s.budget = kids.reduce((a,k)=>a+(k.budget||0),0);
+    s.actual = kids.reduce((a,k)=>a+(k.actual||0),0);
+    const wsum = kids.reduce((a,k)=>a+(k.budget||0),0);
+    s.progress = wsum>0 ? Math.round(kids.reduce((a,k)=>a+(k.progress||0)*(k.budget||0),0)/wsum)
+                         : Math.round(kids.reduce((a,k)=>a+(k.progress||0),0)/kids.length);
+    s.critical = kids.some(k=>k.critical);
+  }
+  tasks.filter(t=>t.parent===null && hasKids(t)).forEach(rollup);
+
+  return { projectDuration };
+}
+
+/* ---------- derived stats ---------- */
+function getStats(){
+  const leaves = tasks.filter(t=>!hasKids(t));
+  const totalBudget = leaves.reduce((a,t)=>a+(t.budget||0),0);
+  const totalActual = leaves.reduce((a,t)=>a+(t.actual||0),0);
+  const overallProgress = totalBudget>0
+    ? Math.round(leaves.reduce((a,t)=>a+(t.progress||0)*(t.budget||0),0)/totalBudget)
+    : Math.round(leaves.reduce((a,t)=>a+(t.progress||0),0)/leaves.length);
+  const endDate = new Date(Math.max(...leaves.map(t=>t.endDate.getTime())));
+  const totalWD = Math.max(...leaves.map(t=>t.EF));
+  const criticalCount = leaves.filter(t=>t.critical).length;
+  const respSet = new Set(leaves.map(t=>t.responsible).filter(Boolean));
+  return {totalBudget, totalActual, overallProgress, endDate, totalWD, criticalCount, leaves: leaves.length, respCount: respSet.size};
+}
+
+/* ---------- rendering: header stats ---------- */
+function renderStats(){
+  const s = getStats();
+  const variance = s.totalBudget - s.totalActual;
+  document.getElementById('metaLine').textContent =
+    `專案期間 ${fmtDate(PROJECT_START)} — ${fmtDate(s.endDate)} ・ 共 ${s.totalWD} 個工作天`;
+
+  const cards = [
+    {lbl:'總預算', val:'NT$ '+money(s.totalBudget)},
+    {lbl:'實際花費', val:'NT$ '+money(s.totalActual)},
+    {lbl:'預算差異', val:(variance>=0?'+':'')+'NT$ '+money(variance), cls: variance>=0?'green':'red'},
+    {lbl:'整體進度', val:s.overallProgress+'%', bar:s.overallProgress},
+    {lbl:'預計完工', val:fmtROC(s.endDate)},
+    {lbl:'關鍵路徑任務', val:s.criticalCount+' / '+s.leaves, cls:'red'},
+    {lbl:'參與負責人', val:s.respCount+' 人'},
+  ];
+  document.getElementById('statCards').innerHTML = cards.map(c=>`
+    <div class="stat">
+      <div class="lbl">${c.lbl}</div>
+      <div class="val ${c.cls||''}">${c.val}</div>
+      ${c.bar!==undefined?`<div class="progress-mini"><div style="width:${c.bar}%"></div></div>`:''}
+    </div>`).join('');
+}
+
+/* ---------- visible rows (respecting collapse, arbitrary depth) ---------- */
+function visibleRows(){
+  const rows = [];
+  function walk(parentId, depth){
+    tasks.filter(t=>t.parent===parentId).forEach(t=>{
+      t._depth = depth;
+      rows.push(t);
+      if(hasKids(t) && !collapsed[t.id]) walk(t.id, depth+1);
+    });
+  }
+  walk(null, 0);
+  return rows;
+}
+
+/* ---------- WBS table ---------- */
+function progColor(p){ return p>=100 ? '#16a34a' : (p>0 ? '#3b82f6' : '#94a3b8'); }
+function predText(t){
+  if(!t.preds || !t.preds.length) return '無';
+  return t.preds.map(p=>{
+    const pt = tasks.find(x=>x.id===p.id);
+    const lagTxt = p.lag ? (p.lag>0?`+${p.lag}`:`${p.lag}`) : '';
+    return `${pt?pt.wbs:'?'} ${p.type}${lagTxt}`;
+  }).join('、');
+}
+
+// renders one <td> for a given column key + task row; kept in sync with renderTableHeader()'s
+// column list so header/body columns always line up regardless of current order/visibility
+function colTdHtml(key, t, isSum, depth, arrow, diff){
+  switch(key){
+    case 'wbs': return `<td class="col-wbs">${t.wbs}</td>`;
+    case 'name': {
+      const chainIdx = multiSelectIds.indexOf(t.id);
+      const chainBadge = chainIdx>=0 ? `<span class="chain-badge" title="Ctrl+點擊選取順序 ${chainIdx+1}">${chainIdx+1}</span>` : '';
+      const nameCell = `<span style="padding-left:${depth*15}px; display:inline-flex; align-items:center; gap:3px" title="${isSum?'':'前置任務: '+predText(t)}">${arrow}${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>`;
+      return `<td class="col-name" title="${t.name}">${nameCell}${chainBadge}</td>`;
+    }
+    case 'resp': return `<td class="col-resp">${isSum?'':(t.responsible||'')}</td>`;
+    case 'start': return `<td>${fmtROC(t.startDate)}</td>`;
+    case 'end': return `<td>${fmtROC(t.endDate)}</td>`;
+    case 'dur': return `<td>${isSum?'':t.duration}</td>`;
+    case 'float': {
+      if(isSum) return '<td></td>';
+      const f = t.float||0;
+      return `<td${f<=0?' style="color:var(--danger); font-weight:700;"':''}>${f}</td>`;
+    }
+    case 'progress': return `<td class="col-progress"><div class="prog-bar-wrap"><div class="prog-bar"><div style="width:${t.progress}%; background:${progColor(t.progress)}"></div></div><span>${t.progress}%</span></div></td>`;
+    case 'budget': return `<td class="col-money">${money(t.budget)}</td>`;
+    case 'actual': return `<td class="col-money">${money(t.actual)}</td>`;
+    case 'diff': return `<td class="col-money ${diff<0?'diff-neg':'diff-pos'}">${diff<0?'':'+'}${money(diff)}</td>`;
+    default: return '<td></td>';
+  }
+}
+function renderTableHeader(){
+  const cols = visibleColumns();
+  const headRow = document.getElementById('wbsHeadRow');
+  headRow.innerHTML = cols.map(k=>{
+    const m = COLUMN_META[k];
+    return `<th style="width:${m.width}px" draggable="true"
+      ondragstart="colDragStart(event,'${k}')" ondragover="colDragOver(event,'${k}')" ondragleave="colDragLeave(event)" ondrop="colDrop(event,'${k}')" ondragend="colDragEnd(event)"
+      oncontextmenu="showColMenu(event,'${k}')" title="拖曳可調整順序，右鍵可移動/隱藏">${m.label}</th>`;
+  }).join('') + `<th style="width:${ACTIONS_COL_WIDTH}px"></th>`;
+}
+function updateTableWidth(){
+  const total = visibleColumns().reduce((a,k)=>a+COLUMN_META[k].width,0) + ACTIONS_COL_WIDTH;
+  document.querySelector('table.wbs-table').style.width = total+'px';
+  document.getElementById('wbsPanel').style.width = total+'px';
+}
+function renderTable(){
+  const critOnly = document.getElementById('critOnly').checked;
+  const rows = visibleRows();
+  const cols = visibleColumns();
+  updateTableWidth();
+  renderTableHeader();
+  const body = document.getElementById('wbsBody');
+  body.innerHTML = rows.map(t=>{
+    const isSum = hasKids(t);
+    if(critOnly && !t.critical) return '';
+    const diff = (t.budget||0)-(t.actual||0);
+    const depth = t._depth||0;
+    const arrow = isSum
+      ? `<span class="collapse-btn" onclick="event.stopPropagation(); toggleCollapse(${t.id})">${collapsed[t.id]?'▶':'▼'}</span>`
+      : `<span class="collapse-btn" style="visibility:hidden">▼</span>`;
+    const stateCls = `${t.id===selectedId?' selected-row':''}${t.id===clipboardId?' cut-row':''}${multiSelectIds.includes(t.id)?' chain-row':''}`;
+    const tds = cols.map(k=>colTdHtml(k, t, isSum, depth, arrow, diff)).join('');
+    return `
+      <tr class="${isSum?'summary-row':''} ${t.critical?'critical-row':''}${stateCls}" onclick="selectRow(${t.id}, event)" oncontextmenu="showContextMenu(event, ${t.id})">
+        ${tds}
+        <td class="row-actions">
+          <button class="icon-btn" onclick="event.stopPropagation(); openEditModal(${t.id})" title="編輯">✎</button>
+          <button class="icon-btn" ${canOutdentOf(t)?'':'disabled'} onclick="event.stopPropagation(); outdentTask(${t.id})" title="降一階：退回上一層（可退回成主要任務）">${OUTDENT_ICON}</button>
+          <button class="icon-btn" ${canIndentOf(t)?'':'disabled'} onclick="event.stopPropagation(); indentTask(${t.id})" title="升一階：變成上一列的子任務">${INDENT_ICON}</button>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+/* ---------- column drag-to-reorder ---------- */
+let dragColKey = null;
+function colDragStart(e, key){
+  dragColKey = key;
+  e.dataTransfer.effectAllowed = 'move';
+  try{ e.dataTransfer.setData('text/plain', key); }catch(err){}
+  e.target.classList.add('col-dragging');
+}
+function colDragOver(e, key){
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if(dragColKey!=null && dragColKey!==key) e.currentTarget.classList.add('col-drag-over');
+}
+function colDragLeave(e){ e.currentTarget.classList.remove('col-drag-over'); }
+function colDrop(e, targetKey){
+  e.preventDefault();
+  e.currentTarget.classList.remove('col-drag-over');
+  if(dragColKey==null || dragColKey===targetKey){ dragColKey=null; return; }
+  const from = columnOrder.indexOf(dragColKey);
+  columnOrder.splice(from,1);
+  const to = columnOrder.indexOf(targetKey);
+  columnOrder.splice(to,0,dragColKey);
+  dragColKey = null;
+  renderTable();
+}
+function colDragEnd(e){
+  dragColKey = null;
+  document.querySelectorAll('.wbs-table thead th').forEach(th=>th.classList.remove('col-dragging','col-drag-over'));
+}
+
+/* ---------- column right-click menu: move left/right, hide ---------- */
+let colCtxTarget = null;
+function showColMenu(e, key){
+  e.preventDefault();
+  e.stopPropagation(); // same fix as the row context menu: avoid the document-level listener closing this menu immediately
+  colCtxTarget = key;
+  const cols = visibleColumns();
+  const idx = cols.indexOf(key);
+  document.getElementById('colMoveLeftBtn').disabled = idx<=0;
+  document.getElementById('colMoveRightBtn').disabled = idx>=cols.length-1;
+  const menu = document.getElementById('colCtxMenu');
+  menu.style.display = 'block';
+  menu.style.left = e.clientX+'px';
+  menu.style.top = e.clientY+'px';
+  requestAnimationFrame(()=>{
+    const rect = menu.getBoundingClientRect();
+    if(rect.right > window.innerWidth) menu.style.left = Math.max(4, window.innerWidth-rect.width-8)+'px';
+    if(rect.bottom > window.innerHeight) menu.style.top = Math.max(4, window.innerHeight-rect.height-8)+'px';
+  });
+}
+function hideColMenu(){
+  const menu = document.getElementById('colCtxMenu');
+  if(menu) menu.style.display = 'none';
+}
+document.addEventListener('click', hideColMenu);
+document.addEventListener('contextmenu', function(e){ if(!e.target.closest('table.wbs-table thead')) hideColMenu(); });
+document.addEventListener('scroll', hideColMenu, true);
+window.addEventListener('resize', hideColMenu);
+function moveColumn(key, dir){
+  const cols = visibleColumns();
+  const idx = cols.indexOf(key);
+  const swapIdx = idx+dir;
+  if(swapIdx<0 || swapIdx>=cols.length) return;
+  const otherKey = cols[swapIdx];
+  const a = columnOrder.indexOf(key), b = columnOrder.indexOf(otherKey);
+  columnOrder[a] = otherKey; columnOrder[b] = key;
+  renderTable();
+}
+function colMoveLeft(){ if(colCtxTarget!=null) moveColumn(colCtxTarget, -1); hideColMenu(); }
+function colMoveRight(){ if(colCtxTarget!=null) moveColumn(colCtxTarget, 1); hideColMenu(); }
+function hideColumn(key){
+  if(visibleColumns().length<=1){ alert('至少要保留一個欄位顯示。'); return; }
+  columnHidden[key] = true;
+  renderTable();
+  renderColPanel();
+}
+function colHideCurrent(){ if(colCtxTarget!=null) hideColumn(colCtxTarget); hideColMenu(); }
+
+/* ---------- column show/hide panel (toolbar button) ---------- */
+function toggleColPanel(e){
+  e.stopPropagation();
+  const panel = document.getElementById('colPanel');
+  const willOpen = panel.style.display !== 'block';
+  panel.style.display = willOpen ? 'block' : 'none';
+  if(willOpen) renderColPanel();
+}
+function renderColPanel(){
+  const panel = document.getElementById('colPanel');
+  if(panel.style.display !== 'block') return;
+  panel.innerHTML = columnOrder.map(k=>{
+    const m = COLUMN_META[k];
+    const checked = !columnHidden[k];
+    return `<label><input type="checkbox" ${checked?'checked':''} onchange="toggleColumnVisible('${k}', this.checked)"> ${m.label}</label>`;
+  }).join('');
+}
+function toggleColumnVisible(key, visible){
+  if(!visible){
+    if(visibleColumns().length<=1){ alert('至少要保留一個欄位顯示。'); renderColPanel(); return; }
+    columnHidden[key] = true;
+  } else {
+    delete columnHidden[key];
+  }
+  renderTable();
+  renderColPanel();
+}
+document.addEventListener('click', function(e){
+  const panel = document.getElementById('colPanel');
+  if(panel && panel.style.display==='block' && !e.target.closest('#colPanel') && !e.target.closest('#colPanelBtn')){
+    panel.style.display = 'none';
+  }
+});
+
+function toggleCollapse(id){ collapsed[id]=!collapsed[id]; renderTable(); renderGantt(); }
+
+/* ---------- task relationship (predecessor / successor) detail panel ---------- */
+const REL_TYPE_LABEL = {FS:'完成→開始', SS:'開始→開始', FF:'完成→完成', SF:'開始→完成'};
+function lagLabel(lag){
+  if(!lag) return '';
+  return lag>0 ? `Lag +${lag} 天` : `Lead ${Math.abs(lag)} 天（提前）`;
+}
+// tasks that list `id` as one of their predecessors (i.e. the "downstream" side of the relationship)
+function getSuccessors(id){
+  const out = [];
+  tasks.forEach(t=>{
+    if(hasKids(t)) return;
+    (t.preds||[]).forEach(p=>{ if(p.id===id) out.push({task:t, type:p.type, lag:p.lag||0}); });
+  });
+  return out;
+}
+function relItemHtml(x){
+  const lag = x.lag||0;
+  return `
+    <div class="rel-item">
+      <span class="rel-wbs">${x.task.wbs}</span>
+      <span class="rel-name" title="${x.task.name}">${x.task.name}</span>
+      <span class="rel-tag">${x.type} ${REL_TYPE_LABEL[x.type]||''}</span>
+      ${lag ? `<span class="rel-lag${lag<0?' lead':''}">${lagLabel(lag)}</span>` : ''}
+    </div>`;
+}
+function renderRelPanel(){
+  const panel = document.getElementById('relPanel');
+  if(!panel) return;
+  if(selectedId==null){
+    panel.innerHTML = `
+      <h3>任務相依關係</h3>
+      <div class="rel-sub">點選左側任一任務列，這裡會列出它的前置任務與後續任務，包含關係類型（FS/SS/FF/SF）與 Lag/Lead 天數。</div>`;
+    return;
+  }
+  const t = tasks.find(x=>x.id===selectedId);
+  if(!t){ panel.innerHTML=''; return; }
+  if(hasKids(t)){
+    panel.innerHTML = `
+      <h3>任務相依關係 — ${t.wbs} ${t.name}</h3>
+      <div class="rel-sub">此為彙總階層，本身不設定前置任務。請點選底下的明細任務查看個別的前後置關係。</div>`;
+    return;
+  }
+  const preds = (t.preds||[]).map(p=>({task:tasks.find(x=>x.id===p.id), type:p.type, lag:p.lag||0})).filter(x=>x.task);
+  const succs = getSuccessors(t.id);
+  panel.innerHTML = `
+    <h3>任務相依關係 — ${t.wbs} ${t.name}</h3>
+    <div class="rel-sub">FS=完成才能開始・SS=同時開始・FF=同時完成・SF=前置開始後此任務才能結束；Lag 正數=延後幾天，負數(Lead)=可提前幾天</div>
+    <div class="rel-cols">
+      <div class="rel-col">
+        <h4>前置任務（本任務要等它們）</h4>
+        ${preds.length ? preds.map(relItemHtml).join('') : '<div class="rel-empty">無前置任務</div>'}
+      </div>
+      <div class="rel-col">
+        <h4>後續任務（等待本任務的項目）</h4>
+        ${succs.length ? succs.map(relItemHtml).join('') : '<div class="rel-empty">無後續任務</div>'}
+      </div>
+    </div>`;
+}
+
+/* ---------- gantt ---------- */
+function setZoom(z){
+  zoom = z;
+  document.getElementById('zoomDay').classList.toggle('active', z==='day');
+  document.getElementById('zoomWeek').classList.toggle('active', z==='week');
+  document.getElementById('zoomMonth').classList.toggle('active', z==='month');
+  renderGantt();
+}
+
+function renderGantt(){
+  const critOnly = document.getElementById('critOnly').checked;
+  const rows = visibleRows().filter(t=> !(critOnly && !t.critical));
+  const pxPerDay = zoom==='day' ? 40 : (zoom==='week' ? 20 : 7);
+  const rowH = 34, headerH = 56;
+  const s = getStats();
+  const totalDays = Math.max(30, Math.ceil((s.endDate-PROJECT_START)/86400000) + 10);
+  const width = totalDays*pxPerDay;
+  const height = headerH + rows.length*rowH + 10;
+
+  // row index lookup for arrows
+  const rowIndex = {}; rows.forEach((t,i)=>rowIndex[t.id]=i);
+
+  function xOfDate(d){ return Math.round((d-PROJECT_START)/86400000)*pxPerDay; }
+
+  // month bands + labels
+  let bands='', monthLabels='', gridLines='';
+  let cur = new Date(PROJECT_START); cur.setDate(cur.getDate()-cur.getDay()+1);
+  let monthCursor = new Date(PROJECT_START.getFullYear(), PROJECT_START.getMonth(), 1);
+  let mi=0;
+  while(xOfDate(monthCursor) < width){
+    const nextMonth = new Date(monthCursor.getFullYear(), monthCursor.getMonth()+1, 1);
+    const x0 = Math.max(0, xOfDate(monthCursor));
+    const x1 = xOfDate(nextMonth);
+    bands += `<rect class="month-band ${mi%2? 'alt':''}" x="${x0}" y="${headerH}" width="${x1-x0}" height="${rows.length*rowH}"></rect>`;
+    monthLabels += `<text class="month-text" x="${x0+6}" y="18">${fmtYM(monthCursor)}</text>`;
+    monthCursor = nextMonth; mi++;
+  }
+  // day/week gridlines + date labels (day zoom: every calendar day; week/month zoom: every 7 days)
+  let wk = new Date(PROJECT_START);
+  const dayStep = zoom==='day' ? 1 : 7;
+  while(xOfDate(wk) < width){
+    const x = xOfDate(wk);
+    gridLines += `<line class="grid-line" x1="${x}" y1="${headerH}" x2="${x}" y2="${headerH+rows.length*rowH}"></line>`;
+    if(zoom==='day' || zoom==='week' || wk.getDay()===1){
+      monthLabels += `<text class="axis-text" x="${x+3}" y="40">${fmtShort(wk)}</text>`;
+    }
+    wk.setDate(wk.getDate() + dayStep);
+  }
+  // horizontal row separators
+  let hlines='';
+  rows.forEach((t,i)=>{
+    hlines += `<line class="grid-line" x1="0" y1="${headerH+(i+1)*rowH}" x2="${width}" y2="${headerH+(i+1)*rowH}"></line>`;
+  });
+
+  // today marker
+  const today = new Date(2026,8,2); // fixed "today" reference for consistent demo (2026-09-02)
+  let todayLine='';
+  if(today >= PROJECT_START){
+    const tx = xOfDate(today);
+    todayLine = `<line class="today-line" x1="${tx}" y1="${headerH}" x2="${tx}" y2="${headerH+rows.length*rowH}"></line>`;
+  }
+
+  // bars
+  let bars='';
+  rows.forEach((t,i)=>{
+    const y = headerH + i*rowH;
+    const cy = y + rowH/2;
+    if(hasKids(t)){
+      const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
+      bars += `<rect class="summary-bar-shape" x="${x0}" y="${cy-4}" width="${Math.max(4,x1-x0)}" height="8" rx="2"></rect>`;
+      bars += `<polygon class="summary-bar-shape" points="${x0},${cy-4} ${x0+7},${cy-4} ${x0},${cy+6}"></polygon>`;
+      bars += `<polygon class="summary-bar-shape" points="${x1},${cy-4} ${x1-7},${cy-4} ${x1},${cy+6}"></polygon>`;
+      return;
+    }
+    if(t.milestone){
+      const x = xOfDate(t.startDate)+pxPerDay/2;
+      const fill = t.progress>=100 ? '#16a34a' : '#d97706';
+      bars += `<rect x="${x-6}" y="${cy-6}" width="12" height="12" rx="2" transform="rotate(45 ${x} ${cy})" fill="${fill}" ${t.critical?'stroke="#dc2626" stroke-width="1.6"':''}></rect>`;
+      return;
+    }
+    const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
+    const w = Math.max(3, x1-x0);
+    const fillColor = t.progress>=100 ? '#16a34a' : (t.progress>0 ? '#3b82f6' : '#94a3b8');
+    bars += `<rect class="bar-track" x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4" ${t.critical?'stroke="#dc2626" stroke-width="1.6"':'stroke="#e2e8f0" stroke-width="1"'}></rect>`;
+    if(t.progress>0){
+      const fw = Math.max(0, w*(t.progress/100));
+      bars += `<rect x="${x0}" y="${cy-9}" width="${fw}" height="18" rx="4" fill="${fillColor}"></rect>`;
+    }
+    if(w>34){
+      bars += `<text class="bar-label" x="${x0+6}" y="${cy+3}" fill="${t.progress>50?'#fff':'#334155'}">${t.progress}%</text>`;
+    }
+  });
+
+  // dependency arrows (FS / SS / FF / SF, with lag/lead labels)
+  function barX(t){
+    if(t.milestone){ const c = xOfDate(t.startDate)+pxPerDay/2; return {left:c, right:c}; }
+    return {left:xOfDate(t.startDate), right:xOfDate(t.endDate)+pxPerDay};
+  }
+  let arrows='';
+  rows.forEach(t=>{
+    if(hasKids(t)) return;
+    (t.preds||[]).forEach(p=>{
+      if(rowIndex[p.id]===undefined || rowIndex[t.id]===undefined) return;
+      const pred = tasks.find(x=>x.id===p.id);
+      const y0 = headerH + rowIndex[p.id]*rowH + rowH/2;
+      const y1 = headerH + rowIndex[t.id]*rowH + rowH/2;
+      const predBar = barX(pred), succBar = barX(t);
+      let x0, x1;
+      switch(p.type){
+        case 'SS': x0 = predBar.left;  x1 = succBar.left;  break;
+        case 'FF': x0 = predBar.right; x1 = succBar.right; break;
+        case 'SF': x0 = predBar.left;  x1 = succBar.right; break;
+        default:   x0 = predBar.right; x1 = succBar.left;  // FS
+      }
+      const midX = (x0+x1)/2;
+      const cls = (t.critical && pred.critical) ? 'arrow-path crit' : 'arrow-path';
+      arrows += `<path class="${cls}" d="M${x0},${y0} L${midX},${y0} L${midX},${y1} L${x1},${y1}" marker-end="url(#arrowhead)"></path>`;
+      if(p.type!=='FS' || p.lag){
+        const lagTxt = p.lag ? (p.lag>0?`+${p.lag}`:`${p.lag}`) : '';
+        arrows += `<text class="axis-text" x="${midX+3}" y="${(y0+y1)/2-3}" fill="${cls.includes('crit')?'#dc2626':'#64748b'}">${p.type}${lagTxt}</text>`;
+      }
+    });
+  });
+
+  const svg = `
+  <svg width="${width}" height="${height}">
+    <defs>
+      <marker id="arrowhead" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"></path>
+      </marker>
+    </defs>
+    ${bands}
+    <rect x="0" y="0" width="${width}" height="${headerH}" fill="#f8fafc"></rect>
+    ${gridLines}
+    ${hlines}
+    ${monthLabels}
+    ${arrows}
+    ${bars}
+    ${todayLine}
+  </svg>`;
+  document.getElementById('ganttWrap').innerHTML = svg;
+}
+
+/* ---------- sync vertical scroll between panels ---------- */
+let syncing = false;
+document.getElementById('wbsPanel').addEventListener('scroll', function(){
+  if(syncing) return; syncing=true;
+  document.getElementById('ganttPanel').scrollTop = this.scrollTop;
+  syncing=false;
+});
+document.getElementById('ganttPanel').addEventListener('scroll', function(){
+  if(syncing) return; syncing=true;
+  document.getElementById('wbsPanel').scrollTop = this.scrollTop;
+  syncing=false;
+});
+
+/* ---------- modal: add / edit ---------- */
+function respOptions(){
+  const set = new Set(tasks.filter(t=>!hasKids(t) && t.responsible).map(t=>t.responsible));
+  return [...set];
+}
+function openAddModal(presetParent){
+  editingId = null;
+  document.getElementById('modalTitle').textContent = '新增任務';
+  document.getElementById('deleteBtn').style.display = 'none';
+  document.getElementById('leafFields').style.display = 'block';
+  document.getElementById('summaryNote').style.display = 'none';
+  f_name.value=''; f_dur.value=5; f_dur.disabled=false; f_resp.value=''; f_budget.value=0; f_actual.value=0; f_progress.value=0; progVal.textContent=0; f_milestone.checked=false;
+  fillParentSelect(presetParent===undefined?null:presetParent, null);
+  fillRespList();
+  fillPredList(null);
+  onFParentChange();
+  document.getElementById('overlay').classList.add('open');
+}
+function openEditModal(id){
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  editingId = id;
+  const isSum = hasKids(t);
+  document.getElementById('modalTitle').textContent = '編輯任務';
+  document.getElementById('deleteBtn').style.display = 'inline-block';
+  document.getElementById('leafFields').style.display = isSum ? 'none' : 'block';
+  document.getElementById('summaryNote').style.display = isSum ? 'block' : 'none';
+  f_name.value=t.name;
+  fillParentSelect(t.parent, id);
+  if(!isSum){
+    f_dur.value=t.duration; f_dur.disabled=false; f_resp.value=t.responsible||'';
+    f_budget.value=t.budget||0; f_actual.value=t.actual||0; f_progress.value=t.progress||0; progVal.textContent=t.progress||0;
+    f_milestone.checked = !!t.milestone;
+    fillRespList();
+    fillPredList(id, t.preds||[]);
+    onFParentChange();
+  }
+  document.getElementById('overlay').classList.add('open');
+}
+// warns (and only warns — the actual data-safe migration happens in saveTask via demoteToSummary)
+// when the currently-selected parent is itself a leaf and would convert to a summary on save
+function onFParentChange(){
+  if(document.getElementById('leafFields').style.display === 'none') return;
+  const val = f_parent.value;
+  const parentId = val===''? null : Number(val);
+  const note = document.getElementById('summaryNote');
+  if(parentId!==null){
+    const pt = tasks.find(x=>x.id===parentId);
+    if(pt && !hasKids(pt)){
+      note.style.display='block';
+      note.textContent = `提示：「${pt.name}」目前是明細任務、有自己的工期與預算。選它作為上層後，系統會自動把它原本的資料保留成一個子任務，它本身則轉為彙總階層（時程/預算改由子項目加總）。`;
+      return;
+    }
+  }
+  note.style.display='none';
+}
+function fillParentSelect(selected, excludeId){
+  const excludeSet = new Set();
+  if(excludeId!=null){ collectSubtree(excludeId, excludeSet); }
+  let html = `<option value="" ${selected===null?'selected':''}>（頂層 / 無上層 → 設為新階段）</option>`;
+  function walk(parentId, depth){
+    tasks.filter(t=>t.parent===parentId).forEach(t=>{
+      if(!excludeSet.has(t.id)){
+        html += `<option value="${t.id}" ${t.id===selected?'selected':''}>${'　'.repeat(depth)}${t.wbs} ${t.name}</option>`;
+      }
+      if(!excludeSet.has(t.id)) walk(t.id, depth+1);
+    });
+  }
+  walk(null, 0);
+  document.getElementById('f_parent').innerHTML = html;
+}
+function fillRespList(){
+  document.getElementById('respList').innerHTML = respOptions().map(r=>`<option value="${r}">`).join('');
+}
+function fillPredList(selfId, existingPreds){
+  existingPreds = existingPreds || [];
+  const map = {}; existingPreds.forEach(p=>map[p.id]=p);
+  const leaves = tasks.filter(t=>!hasKids(t) && t.id!==selfId);
+  document.getElementById('f_preds').innerHTML = leaves.map(t=>{
+    const ex = map[t.id];
+    const checked = !!ex, type = ex?ex.type:'FS', lag = ex?ex.lag:0;
+    return `
+    <div class="pred-row">
+      <label class="pred-chk-label"><input type="checkbox" class="pred-chk" data-id="${t.id}" ${checked?'checked':''} onchange="togglePredDetail(this)"> ${t.wbs} ${t.name}</label>
+      <div class="pred-detail" data-id="${t.id}" style="display:${checked?'flex':'none'}">
+        <select class="pred-type" data-id="${t.id}">
+          <option value="FS" ${type==='FS'?'selected':''}>FS 完成-開始</option>
+          <option value="SS" ${type==='SS'?'selected':''}>SS 開始-開始</option>
+          <option value="FF" ${type==='FF'?'selected':''}>FF 完成-完成</option>
+          <option value="SF" ${type==='SF'?'selected':''}>SF 開始-完成</option>
+        </select>
+        <input type="number" class="pred-lag" data-id="${t.id}" value="${lag}" placeholder="Lag(天)" title="正數=延後(Lag)，負數=提前(Lead)">
+      </div>
+    </div>`;
+  }).join('') || '<span class="hint">尚無可選前置任務</span>';
+}
+function togglePredDetail(chk){
+  const id = chk.getAttribute('data-id');
+  const detail = document.querySelector(`.pred-detail[data-id="${id}"]`);
+  if(detail) detail.style.display = chk.checked ? 'flex' : 'none';
+}
+function onMilestoneToggle(){
+  if(f_milestone.checked){ f_dur.value=1; f_dur.disabled=true; } else { f_dur.disabled=false; }
+}
+function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
+
+function saveTask(){
+  const name = f_name.value.trim();
+  if(!name){ alert('請輸入任務名稱'); return; }
+  const parentVal = f_parent.value;
+  const parent = parentVal===''? null : Number(parentVal);
+
+  if(editingId!=null){
+    const t = tasks.find(x=>x.id===editingId);
+    const parentChanged = parent !== t.parent;
+    t.name = name;
+    if(parentChanged){
+      if(parent!==null){ const pt = tasks.find(x=>x.id===parent); if(pt) demoteToSummary(pt); }
+      t.parent = parent;
+      placeUnderParent(t, parent);
+    }
+    if(!hasKids(t)){
+      t.duration = f_milestone.checked ? 1 : Math.max(1, Number(f_dur.value)||1);
+      t.responsible = f_resp.value.trim();
+      t.budget = Math.max(0, Number(f_budget.value)||0);
+      t.actual = Math.max(0, Number(f_actual.value)||0);
+      t.progress = Math.min(100, Math.max(0, Number(f_progress.value)||0));
+      t.milestone = f_milestone.checked;
+      t.preds = [...document.querySelectorAll('#f_preds .pred-chk:checked')].map(chk=>{
+        const id = Number(chk.getAttribute('data-id'));
+        const type = document.querySelector(`.pred-type[data-id="${id}"]`).value;
+        const lag = Number(document.querySelector(`.pred-lag[data-id="${id}"]`).value)||0;
+        return {id, type, lag};
+      });
+    }
+  } else {
+    const duration = f_milestone.checked ? 1 : Math.max(1, Number(f_dur.value)||1);
+    const responsible = f_resp.value.trim();
+    const budget = Math.max(0, Number(f_budget.value)||0);
+    const actual = Math.max(0, Number(f_actual.value)||0);
+    const progress = Math.min(100, Math.max(0, Number(f_progress.value)||0));
+    const milestone = f_milestone.checked;
+    const preds = [...document.querySelectorAll('#f_preds .pred-chk:checked')].map(chk=>{
+      const id = Number(chk.getAttribute('data-id'));
+      const type = document.querySelector(`.pred-type[data-id="${id}"]`).value;
+      const lag = Number(document.querySelector(`.pred-lag[data-id="${id}"]`).value)||0;
+      return {id, type, lag};
+    });
+    if(parent!==null){ const pt = tasks.find(x=>x.id===parent); if(pt) demoteToSummary(pt); }
+    tasks.push({id:nextId++, wbs:'', name, parent, duration, preds, responsible, budget, actual, progress, milestone});
+    if(parent!==null) collapsed[parent] = false; // auto-expand so the new child is visible
+  }
+  closeModal();
+  render();
+  syncToSheet();
+}
+function deleteCurrent(){
+  if(editingId==null) return;
+  if(!deleteTaskById(editingId)) return;
+  closeModal();
+}
+// shared by the edit-modal delete button and the right-click context menu. Returns true if the
+// deletion actually happened (false if the user cancelled the confirm dialog).
+function deleteTaskById(id){
+  const t = tasks.find(x=>x.id===id);
+  if(!t) return false;
+  const kids = hasKids(t);
+  const msg = kids
+    ? '此任務底下還有子任務，刪除後子任務會一併刪除，確定要刪除嗎？'
+    : '確定要刪除此任務嗎？其他以此任務為前置任務的項目也會一併移除相依關係。';
+  if(!confirm(msg)) return false;
+  const toDelete = new Set(); collectSubtree(id, toDelete);
+  tasks = tasks.filter(t=>!toDelete.has(t.id));
+  tasks.forEach(t=>{ if(t.preds) t.preds = t.preds.filter(p=>!toDelete.has(p.id)); });
+  if(toDelete.has(selectedId)) selectedId = null;
+  if(toDelete.has(clipboardId)) clipboardId = null;
+  if(multiSelectIds.some(id=>toDelete.has(id))) multiSelectIds = multiSelectIds.filter(id=>!toDelete.has(id));
+  render();
+  updateClipboardBar();
+  updateChainBar();
+  syncToSheet();
+  return true;
+}
+// duplicates a task and its whole subtree, inserted as the next sibling right after the original.
+// internal cross-references between cloned nodes are remapped to the new ids; references to
+// tasks outside the duplicated subtree are left pointing at the originals.
+function duplicateTask(id){
+  const root = tasks.find(x=>x.id===id); if(!root) return;
+  const subtreeIds = new Set(); collectSubtree(id, subtreeIds);
+  const originals = tasks.filter(t=>subtreeIds.has(t.id));
+  const idMap = {};
+  const clones = originals.map(t=>{
+    const newId = nextId++;
+    idMap[t.id] = newId;
+    return {...t, id:newId, wbs:'', preds:(t.preds||[]).map(p=>({...p}))};
+  });
+  clones.forEach((c,i)=>{
+    const orig = originals[i];
+    c.parent = (orig.id===id) ? orig.parent : idMap[orig.parent];
+    c.preds = c.preds.map(p=> idMap[p.id]!==undefined ? {...p, id:idMap[p.id]} : p);
+  });
+  const rootClone = clones[originals.findIndex(o=>o.id===id)];
+  if(rootClone) rootClone.name = rootClone.name + '（複製）';
+  let insertAt = tasks.length;
+  for(let i=tasks.length-1;i>=0;i--){ if(subtreeIds.has(tasks[i].id)){ insertAt=i+1; break; } }
+  tasks.splice(insertAt, 0, ...clones);
+  if(rootClone) selectedId = rootClone.id;
+  render();
+  syncToSheet();
+}
+
+/* ---------- right-click context menu ---------- */
+let ctxTargetId = null;
+function showContextMenu(e, id){
+  e.preventDefault();
+  e.stopPropagation(); // the render below detaches e.target mid-bubble —
+                        // without this, the document-level "close on outside right-click" listener
+                        // would see a detached target and immediately hide the menu we just opened
+  ctxTargetId = id;
+  // deliberately NOT selectRow(id, e): a right-click sets the primary selection (for edit/cut/paste)
+  // without touching multiSelectIds — otherwise right-clicking to open "串聯相依關係" on a task that's
+  // part of the chain would wipe the very chain the menu item is about to act on
+  selectedId = id;
+  renderTable();
+  updateClipboardBar();
+  renderRelPanel();
+  const menu = document.getElementById('ctxMenu');
+  document.getElementById('ctxPasteBtn').style.display = (clipboardId!=null && clipboardId!==id) ? 'block' : 'none';
+  document.getElementById('ctxChainBtn').style.display = multiSelectIds.length>=2 ? 'block' : 'none';
+  menu.style.display = 'block';
+  menu.style.left = e.clientX+'px';
+  menu.style.top = e.clientY+'px';
+  requestAnimationFrame(()=>{
+    const rect = menu.getBoundingClientRect();
+    if(rect.right > window.innerWidth) menu.style.left = Math.max(4, window.innerWidth-rect.width-8)+'px';
+    if(rect.bottom > window.innerHeight) menu.style.top = Math.max(4, window.innerHeight-rect.height-8)+'px';
+  });
+}
+function hideContextMenu(){
+  const menu = document.getElementById('ctxMenu');
+  if(menu) menu.style.display = 'none';
+}
+document.addEventListener('click', hideContextMenu);
+document.addEventListener('contextmenu', function(e){ if(!e.target.closest('.wbs-table tbody tr')) hideContextMenu(); });
+document.addEventListener('scroll', hideContextMenu, true);
+window.addEventListener('resize', hideContextMenu);
+function ctxEdit(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) openEditModal(id); }
+function ctxAddChild(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) openAddModal(id); }
+function ctxAddSibling(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return; const t=tasks.find(x=>x.id===id); openAddModal(t?t.parent:null); }
+function ctxDuplicate(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) duplicateTask(id); }
+function ctxCut(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return; selectedId=id; cutTask(); }
+function ctxPaste(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return; selectedId=id; pasteTask(); }
+function ctxDelete(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) deleteTaskById(id); }
+function ctxChainLink(){ hideContextMenu(); chainLinkTasks(); }
+
+/* ---------- main render ---------- */
+function render(){
+  computeSchedule();
+  renderStats();
+  renderTable();
+  renderGantt();
+  renderRelPanel();
+  updateChainBar();
+}
+loadFromSheet();
+</script>
+</body>
+</html>
