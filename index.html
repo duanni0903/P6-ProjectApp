@@ -165,13 +165,23 @@
   .rel-cols{display:flex; gap:24px; flex-wrap:wrap;}
   .rel-col{flex:1; min-width:240px;}
   .rel-col h4{margin:0 0 8px; font-size:11.5px; color:var(--text-dim); font-weight:700;}
-  .rel-item{display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px; font-size:12.5px; background:#fafcff;}
+  .rel-item{display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px; font-size:12.5px; background:#fafcff; flex-wrap:wrap;}
   .rel-item .rel-wbs{color:var(--text-faint); font-variant-numeric:tabular-nums; min-width:28px;}
-  .rel-item .rel-name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .rel-item .rel-name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:60px;}
   .rel-tag{font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:5px; background:#eef2ff; color:var(--primary-dark); white-space:nowrap;}
   .rel-lag{font-size:11px; color:var(--text-dim); white-space:nowrap;}
   .rel-lag.lead{color:var(--warning);}
   .rel-empty{font-size:12px; color:var(--text-faint); padding:4px 0 2px;}
+  /* editable controls inside each rel-item row (v26: inline edit of type/lag, remove, and the
+     "add predecessor" row below the preds column) — sized to sit comfortably next to rel-name */
+  .rel-type-select{border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 5px; font-family:inherit; background:#fff; color:var(--text);}
+  .rel-lag-input{width:60px; border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 6px; font-family:inherit;}
+  .rel-remove{border:none; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 6px; border-radius:5px; font-family:inherit;}
+  .rel-remove:hover{background:var(--danger-bg); color:var(--danger);}
+  .rel-add-row{display:flex; gap:6px; align-items:center; margin-top:4px;}
+  .rel-add-row select{flex:1; min-width:0; border:1px solid var(--border-dark); border-radius:6px; font-size:12px; padding:5px 7px; font-family:inherit; background:#fff; color:var(--text);}
+  .rel-add-btn{border:1px solid var(--primary); background:var(--primary); color:#fff; border-radius:6px; font-size:12px; padding:5px 12px; cursor:pointer; font-family:inherit; white-space:nowrap; font-weight:600;}
+  .rel-add-btn:hover{background:var(--primary-dark); border-color:var(--primary-dark);}
 
   /* right-click context menu */
   .ctx-menu{
@@ -235,7 +245,7 @@
 
   <div class="titlebar">
     <div>
-      <h1>大安區OO商辦大樓新建工程</h1>
+      <h1 id="projectTitle">大安區OO商辦大樓新建工程</h1>
     </div>
     <div style="text-align:right">
       <div class="sub" id="metaLine"></div>
@@ -473,6 +483,16 @@ let multiSelectIds = []; // ordered list of task ids built by Ctrl/Cmd+click, in
    unchanged) so a manual edit in the Sheet never gets wiped by the next auto-sync. Workload stats
    (taskCount/inProgress/done/totalDuration/totalBudget/totalActual/criticalCount) are recomputed fresh
    every render from the current tasks — same "computed report column" pattern as float/diff on tasks. */
+/* ---------- Project name (v25): editable from the backend "設定" sheet ---------- */
+// The <h1> in the HTML carries the built-in demo name as its literal text — that's also this app's
+// fallback default when the Sheet isn't connected, or hasn't got a 設定 分頁 yet (e.g. an older
+// Code.gs deployed before this feature existed — doGet from that version simply won't include a
+// `settings` key in its response, and this app quietly keeps the hardcoded default, no error).
+let projectName = document.getElementById('projectTitle').textContent;
+function applyProjectName(){
+  document.getElementById('projectTitle').textContent = projectName;
+}
+
 let owners = [
   // sample contact/dept info for the built-in demo — matches the `responsible` values used in the
   // sample tasks above. This is the ONLY data owners[] starts with; workload stats (taskCount/
@@ -586,8 +606,16 @@ async function loadFromSheet(){
   try{
     const res = await fetch(SHEET_API_URL, { method:'GET' });
     const data = await res.json();
-    // doGet now returns { tasks:[...], owners:[...] } (not a bare array) — owners is the 負責人 分頁's
-    // editable name/contact/dept rows; relationships is never read back (see computeRelationships()).
+    // doGet now returns { tasks:[...], owners:[...], settings:{...} } (not a bare array) — owners is the
+    // 負責人 分頁's editable name/contact/dept rows; relationships is never read back (see
+    // computeRelationships()); settings is a small key→value config sheet (目前只有 projectName，也就是
+    // 標題列上顯示的專案名稱，使用者直接在 Google Sheet 的「設定」分頁改「值」那一欄即可，這裡完全是
+    // 唯讀——網頁沒有編輯專案名稱的介面，也不會把這個值寫回試算表). Applied independent of whether
+    // taskData below turns out to be empty, since a project can have a name before it has any tasks.
+    if(data && data.settings && typeof data.settings.projectName === 'string' && data.settings.projectName.trim()){
+      projectName = data.settings.projectName.trim();
+      applyProjectName();
+    }
     const taskData = data && Array.isArray(data.tasks) ? data.tasks : null;
     if(taskData && taskData.length){
       // ids/parent/preds[].id always travel as strings inside the app (see genNextId() above) —
@@ -1608,15 +1636,68 @@ function getSuccessors(id){
   });
   return out;
 }
-function relItemHtml(x){
+// v26: the panel used to just print these as static spans; now every row is directly editable
+// (type dropdown + lag number input + a remove button), and the preds column also gets an
+// "add predecessor" control — no need to open the task edit modal just to tweak a relationship.
+//
+// Both preds and succs resolve to the same {task, type, lag} shape once looked up, but they live
+// in DIFFERENT underlying arrays: a predecessor relationship is stored on THIS task's own `preds`
+// array, while a successor relationship is actually stored on the OTHER (successor) task's `preds`
+// array (pointing back at this task). relRowHtml() and the mutators below take that into account via
+// (taskId, predId): taskId = which task's preds array holds the entry, predId = that entry's `id`.
+function relRowHtml(mode, ownerId, x){
   const lag = x.lag||0;
+  const taskId = mode==='pred' ? ownerId : x.task.id;   // whose `preds` array this relationship lives in
+  const predId = mode==='pred' ? x.task.id : ownerId;   // the `id` field within that preds array
   return `
     <div class="rel-item">
       <span class="rel-wbs">${x.task.wbs}</span>
       <span class="rel-name" title="${x.task.name}">${x.task.name}</span>
-      <span class="rel-tag">${x.type} ${REL_TYPE_LABEL[x.type]||''}</span>
-      ${lag ? `<span class="rel-lag${lag<0?' lead':''}">${lagLabel(lag)}</span>` : ''}
+      <select class="rel-type-select" title="關係類型" onchange="setRelType('${taskId}','${predId}', this.value)">
+        <option value="FS" ${x.type==='FS'?'selected':''}>FS 完成→開始</option>
+        <option value="SS" ${x.type==='SS'?'selected':''}>SS 開始→開始</option>
+        <option value="FF" ${x.type==='FF'?'selected':''}>FF 完成→完成</option>
+        <option value="SF" ${x.type==='SF'?'selected':''}>SF 開始→完成</option>
+      </select>
+      <input type="number" class="rel-lag-input" value="${lag}" title="正數=延後(Lag)天，負數=提前(Lead)天" onchange="setRelLag('${taskId}','${predId}', this.value)">
+      <button type="button" class="rel-remove" title="移除此相依關係" onclick="removeRel('${taskId}','${predId}')">×</button>
     </div>`;
+}
+function findPredEntry(taskId, predId){
+  const t = tasks.find(x=>x.id===taskId);
+  if(!t) return null;
+  return (t.preds||[]).find(p=>p.id===predId) || null;
+}
+function setRelType(taskId, predId, newType){
+  const e = findPredEntry(taskId, predId);
+  if(!e) return;
+  e.type = newType;
+  render(); syncToSheet();
+}
+function setRelLag(taskId, predId, newLagRaw){
+  const e = findPredEntry(taskId, predId);
+  if(!e) return;
+  e.lag = Number(newLagRaw)||0;
+  render(); syncToSheet();
+}
+function removeRel(taskId, predId){
+  const t = tasks.find(x=>x.id===taskId);
+  if(!t) return;
+  t.preds = (t.preds||[]).filter(p=>p.id!==predId);
+  render(); syncToSheet();
+}
+// "+ 新增前置任務" control at the bottom of the preds column — adds with a default FS/Lag 0
+// relationship (consistent with fillPredList's default for a freshly-checked box), which the user
+// can then adjust inline via the same select/input this panel already renders for existing rows.
+function addPredFromPanel(ownerId, selectEl){
+  const predId = selectEl.value;
+  if(!predId) return;
+  const t = tasks.find(x=>x.id===ownerId);
+  if(!t) return;
+  t.preds = t.preds || [];
+  if(t.preds.some(p=>p.id===predId)) return; // already linked — guard against a stale option list
+  t.preds.push({id:predId, type:'FS', lag:0});
+  render(); syncToSheet();
 }
 function renderRelPanel(){
   const panel = document.getElementById('relPanel');
@@ -1624,7 +1705,7 @@ function renderRelPanel(){
   if(selectedId==null){
     panel.innerHTML = `
       <h3>任務相依關係</h3>
-      <div class="rel-sub">點選左側任一任務列，這裡會列出它的前置任務與後續任務，包含關係類型（FS/SS/FF/SF）與 Lag/Lead 天數。</div>`;
+      <div class="rel-sub">點選左側任一任務列，這裡會列出它的前置任務與後續任務，包含關係類型（FS/SS/FF/SF）與 Lag/Lead 天數，並可直接編輯。</div>`;
     return;
   }
   const t = tasks.find(x=>x.id===selectedId);
@@ -1637,17 +1718,28 @@ function renderRelPanel(){
   }
   const preds = (t.preds||[]).map(p=>({task:tasks.find(x=>x.id===p.id), type:p.type, lag:p.lag||0})).filter(x=>x.task);
   const succs = getSuccessors(t.id);
+  const predCandidates = tasks.filter(x=>!hasKids(x) && x.id!==t.id && !(t.preds||[]).some(p=>p.id===x.id));
+  const addRowHtml = predCandidates.length
+    ? `<div class="rel-add-row">
+         <select id="relAddPredSelect">
+           <option value="">＋ 選擇要新增的前置任務…</option>
+           ${predCandidates.map(x=>`<option value="${x.id}">${x.wbs} ${x.name}</option>`).join('')}
+         </select>
+         <button type="button" class="rel-add-btn" onclick="addPredFromPanel('${t.id}', document.getElementById('relAddPredSelect'))">加入</button>
+       </div>`
+    : '';
   panel.innerHTML = `
     <h3>任務相依關係 — ${t.wbs} ${t.name}</h3>
-    <div class="rel-sub">FS=完成才能開始・SS=同時開始・FF=同時完成・SF=前置開始後此任務才能結束；Lag 正數=延後幾天，負數(Lead)=可提前幾天</div>
+    <div class="rel-sub">FS=完成才能開始・SS=同時開始・FF=同時完成・SF=前置開始後此任務才能結束；Lag 正數=延後幾天，負數(Lead)=可提前幾天。可直接調整類型/Lag，或按 × 移除關係。</div>
     <div class="rel-cols">
       <div class="rel-col">
         <h4>前置任務（本任務要等它們）</h4>
-        ${preds.length ? preds.map(relItemHtml).join('') : '<div class="rel-empty">無前置任務</div>'}
+        ${preds.length ? preds.map(x=>relRowHtml('pred', t.id, x)).join('') : '<div class="rel-empty">無前置任務</div>'}
+        ${addRowHtml}
       </div>
       <div class="rel-col">
         <h4>後續任務（等待本任務的項目）</h4>
-        ${succs.length ? succs.map(relItemHtml).join('') : '<div class="rel-empty">無後續任務</div>'}
+        ${succs.length ? succs.map(x=>relRowHtml('succ', t.id, x)).join('') : '<div class="rel-empty">無後續任務</div>'}
       </div>
     </div>`;
 }
