@@ -154,6 +154,15 @@
   .pred-detail input[type=number]{width:72px; border:1px solid var(--border-dark); border-radius:6px; font-size:12px; padding:3px 6px; font-family:inherit;}
   .modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:16px;}
   .hint{font-size:11px; color:var(--text-faint); margin-top:3px;}
+  /* v27: relationship task-picker modal */
+  .rel-pick-search{width:100%; padding:7px 9px; border:1px solid var(--border-dark); border-radius:7px; font-size:13px; font-family:inherit; color:var(--text); margin-bottom:10px;}
+  .rel-pick-list{border:1px solid var(--border-dark); border-radius:7px; max-height:280px; overflow:auto;}
+  .rel-pick-item{display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--border); cursor:pointer; font-size:13px;}
+  .rel-pick-item:last-child{border-bottom:none;}
+  .rel-pick-item:hover{background:#eef2ff;}
+  .rel-pick-item .rel-wbs{color:var(--text-faint); font-variant-numeric:tabular-nums; min-width:28px;}
+  .rel-pick-item .rel-name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .rel-pick-empty{padding:14px 10px; font-size:12.5px; color:var(--text-faint); text-align:center;}
   .checkline{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text);}
 
   footer.note{margin-top:16px; font-size:11.5px; color:var(--text-faint); line-height:1.6;}
@@ -172,16 +181,28 @@
   .rel-lag{font-size:11px; color:var(--text-dim); white-space:nowrap;}
   .rel-lag.lead{color:var(--warning);}
   .rel-empty{font-size:12px; color:var(--text-faint); padding:4px 0 2px;}
-  /* editable controls inside each rel-item row (v26: inline edit of type/lag, remove, and the
-     "add predecessor" row below the preds column) — sized to sit comfortably next to rel-name */
-  .rel-type-select{border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 5px; font-family:inherit; background:#fff; color:var(--text);}
-  .rel-lag-input{width:60px; border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 6px; font-family:inherit;}
-  .rel-remove{border:none; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 6px; border-radius:5px; font-family:inherit;}
+  /* editable controls inside each rel-item row (v26: inline edit of type/lag, remove; v27: type
+     select is now bare FS/SS/FF/SF with no Chinese label, and "add" opens the task-picker modal
+     below instead of an inline select; v28: column header row above the list) — each control gets
+     a FIXED width matching its header cell (.rel-col-type / .rel-col-lag / .rel-col-remove) so the
+     header labels (任務名稱・關係・Lag(D)) line up with the values in every row underneath. */
+  .rel-item-header{display:flex; align-items:center; gap:8px; padding:0 10px; margin-bottom:5px; font-size:10.5px; font-weight:700; color:var(--text-dim);}
+  .rel-item-header .rel-wbs{min-width:28px;}
+  .rel-item-header .rel-name{flex:1; min-width:60px;}
+  /* v28: 任務名稱/關係/Lag(D) header cells are click-to-sort, same tactile feel as the main WBS
+     table's sortable headers (a hover tint, then a "pressed" nudge while the mouse is held down) */
+  .rel-col-sortable{cursor:pointer; user-select:none; border-radius:5px; padding:2px 4px; margin:-2px -4px; transition:background-color .08s ease, transform .08s ease;}
+  .rel-col-sortable:hover{background-color:#e2e8f0;}
+  .rel-col-sortable:active{transform:translateY(1px) scale(.97); background-color:#cbd5e1;}
+  .rel-col-type{width:52px; flex:none;}
+  .rel-col-lag{width:60px; flex:none;}
+  .rel-col-remove{width:20px; flex:none;}
+  .rel-type-select{width:52px; flex:none; border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 5px; font-family:inherit; background:#fff; color:var(--text);}
+  .rel-lag-input{width:60px; flex:none; border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 6px; font-family:inherit;}
+  .rel-remove{width:20px; flex:none; border:none; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 0; border-radius:5px; font-family:inherit; text-align:center;}
   .rel-remove:hover{background:var(--danger-bg); color:var(--danger);}
-  .rel-add-row{display:flex; gap:6px; align-items:center; margin-top:4px;}
-  .rel-add-row select{flex:1; min-width:0; border:1px solid var(--border-dark); border-radius:6px; font-size:12px; padding:5px 7px; font-family:inherit; background:#fff; color:var(--text);}
-  .rel-add-btn{border:1px solid var(--primary); background:var(--primary); color:#fff; border-radius:6px; font-size:12px; padding:5px 12px; cursor:pointer; font-family:inherit; white-space:nowrap; font-weight:600;}
-  .rel-add-btn:hover{background:var(--primary-dark); border-color:var(--primary-dark);}
+  .rel-add-btn{display:block; width:100%; margin-top:4px; border:1px dashed var(--border-dark); background:#fff; color:var(--primary-dark); border-radius:8px; font-size:12px; padding:7px 10px; cursor:pointer; font-family:inherit; font-weight:600;}
+  .rel-add-btn:hover{background:#eef2ff; border-color:var(--primary);}
 
   /* right-click context menu */
   .ctx-menu{
@@ -373,6 +394,19 @@
       <button class="btn" onclick="closeModal()">取消</button>
       <button class="btn" style="border-color:var(--danger); color:var(--danger); display:none" id="deleteBtn" onclick="deleteCurrent()">刪除任務</button>
       <button class="btn primary" onclick="saveTask()">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- v27: relationship task-picker modal, opened from the "任務相依關係" panel's "+ 新增前置/後續任務"
+     buttons — a searchable list of candidate tasks; clicking one adds the relationship immediately. -->
+<div class="overlay" id="relPickOverlay">
+  <div class="modal rel-pick-modal">
+    <h2 id="relPickTitle">選擇任務</h2>
+    <input type="text" id="relPickSearch" class="rel-pick-search" placeholder="搜尋任務名稱或 Activity ID…" oninput="renderRelPickList(this.value)">
+    <div class="rel-pick-list" id="relPickList"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeRelPicker()">取消</button>
     </div>
   </div>
 </div>
@@ -1636,6 +1670,38 @@ function getSuccessors(id){
   });
   return out;
 }
+// v28: the preds/succs columns are independently click-to-sortable by 任務名稱/關係/Lag(D), the
+// same 1st-click-ascending / 2nd-click-descending / 3rd-click-back-to-original pattern as the main
+// WBS table's sortByColumn() (see sortColKey/sortDir above) — kept as separate state per column
+// (mode) since the two lists show different relationships and sorting one shouldn't reorder the other.
+let relSort = { pred: {key:null, dir:0}, succ: {key:null, dir:0} };
+function relSortValue(key, x){ // x: {task, type, lag}
+  switch(key){
+    case 'name': return x.task.name||'';
+    case 'type': return x.type||'';
+    case 'lag': return x.lag||0;
+    default: return '';
+  }
+}
+function sortRelColumn(mode, key){
+  const s = relSort[mode];
+  if(s.key !== key){ s.key = key; s.dir = 1; }
+  else if(s.dir === 1){ s.dir = 2; }
+  else { s.key = null; s.dir = 0; }
+  renderRelPanel();
+}
+function relHeaderRowHtml(mode){
+  const s = relSort[mode];
+  const icon = k => s.key===k ? `<span class="sort-icon">${s.dir===1?'▲':'▼'}</span>` : '';
+  return `
+    <div class="rel-item-header">
+      <span class="rel-wbs"></span>
+      <span class="rel-name rel-col-sortable" onclick="sortRelColumn('${mode}','name')">任務名稱${icon('name')}</span>
+      <span class="rel-col-type rel-col-sortable" onclick="sortRelColumn('${mode}','type')">關係${icon('type')}</span>
+      <span class="rel-col-lag rel-col-sortable" onclick="sortRelColumn('${mode}','lag')">Lag(D)${icon('lag')}</span>
+      <span class="rel-col-remove"></span>
+    </div>`;
+}
 // v26: the panel used to just print these as static spans; now every row is directly editable
 // (type dropdown + lag number input + a remove button), and the preds column also gets an
 // "add predecessor" control — no need to open the task edit modal just to tweak a relationship.
@@ -1654,10 +1720,10 @@ function relRowHtml(mode, ownerId, x){
       <span class="rel-wbs">${x.task.wbs}</span>
       <span class="rel-name" title="${x.task.name}">${x.task.name}</span>
       <select class="rel-type-select" title="關係類型" onchange="setRelType('${taskId}','${predId}', this.value)">
-        <option value="FS" ${x.type==='FS'?'selected':''}>FS 完成→開始</option>
-        <option value="SS" ${x.type==='SS'?'selected':''}>SS 開始→開始</option>
-        <option value="FF" ${x.type==='FF'?'selected':''}>FF 完成→完成</option>
-        <option value="SF" ${x.type==='SF'?'selected':''}>SF 開始→完成</option>
+        <option value="FS" ${x.type==='FS'?'selected':''}>FS</option>
+        <option value="SS" ${x.type==='SS'?'selected':''}>SS</option>
+        <option value="FF" ${x.type==='FF'?'selected':''}>FF</option>
+        <option value="SF" ${x.type==='SF'?'selected':''}>SF</option>
       </select>
       <input type="number" class="rel-lag-input" value="${lag}" title="正數=延後(Lag)天，負數=提前(Lead)天" onchange="setRelLag('${taskId}','${predId}', this.value)">
       <button type="button" class="rel-remove" title="移除此相依關係" onclick="removeRel('${taskId}','${predId}')">×</button>
@@ -1686,19 +1752,82 @@ function removeRel(taskId, predId){
   t.preds = (t.preds||[]).filter(p=>p.id!==predId);
   render(); syncToSheet();
 }
-// "+ 新增前置任務" control at the bottom of the preds column — adds with a default FS/Lag 0
-// relationship (consistent with fillPredList's default for a freshly-checked box), which the user
-// can then adjust inline via the same select/input this panel already renders for existing rows.
-function addPredFromPanel(ownerId, selectEl){
-  const predId = selectEl.value;
+// Adds a predecessor relationship to `ownerId` (defaults to FS/Lag 0, consistent with
+// fillPredList's default for a freshly-checked box) — the user can then adjust type/lag inline
+// via the same select/input this panel already renders for existing rows.
+function addPredFromPanel(ownerId, predId){
   if(!predId) return;
   const t = tasks.find(x=>x.id===ownerId);
   if(!t) return;
   t.preds = t.preds || [];
-  if(t.preds.some(p=>p.id===predId)) return; // already linked — guard against a stale option list
+  if(t.preds.some(p=>p.id===predId)) return; // already linked — guard against a stale candidate list
   t.preds.push({id:predId, type:'FS', lag:0});
   render(); syncToSheet();
 }
+// Adds a successor relationship: makes `ownerId` one of `succId`'s predecessors (a successor
+// relationship is just the mirror image of a predecessor one — see relRowHtml's comment above).
+function addSuccFromPanel(ownerId, succId){
+  if(!succId) return;
+  const t = tasks.find(x=>x.id===succId);
+  if(!t) return;
+  t.preds = t.preds || [];
+  if(t.preds.some(p=>p.id===ownerId)) return; // already linked
+  t.preds.push({id:ownerId, type:'FS', lag:0});
+  render(); syncToSheet();
+}
+
+/* ---------- v27: relationship task-picker modal ---------- */
+// Opened by the "+ 新增前置任務" / "+ 新增後續任務" buttons in the rel panel — a searchable list of
+// candidate tasks instead of an inline <select>. relPickCtx remembers which panel/task triggered it
+// so pickRelTask() knows whether to call addPredFromPanel or addSuccFromPanel, and with which owner.
+let relPickCtx = null; // {mode:'pred'|'succ', ownerId}
+function openRelPicker(mode, ownerId){
+  relPickCtx = {mode, ownerId};
+  document.getElementById('relPickTitle').textContent = mode==='pred' ? '選擇前置任務' : '選擇後續任務';
+  const search = document.getElementById('relPickSearch');
+  search.value = '';
+  renderRelPickList('');
+  document.getElementById('relPickOverlay').classList.add('open');
+  search.focus();
+}
+function closeRelPicker(){
+  document.getElementById('relPickOverlay').classList.remove('open');
+  relPickCtx = null;
+}
+function relPickCandidates(){
+  if(!relPickCtx) return [];
+  const {mode, ownerId} = relPickCtx;
+  const t = tasks.find(x=>x.id===ownerId);
+  if(!t) return [];
+  if(mode==='pred'){
+    return tasks.filter(x=>!hasKids(x) && x.id!==ownerId && !(t.preds||[]).some(p=>p.id===x.id));
+  }
+  // succ: candidates are leaf tasks that don't already list ownerId as one of their predecessors
+  return tasks.filter(x=>!hasKids(x) && x.id!==ownerId && !(x.preds||[]).some(p=>p.id===ownerId));
+}
+function renderRelPickList(query){
+  const list = document.getElementById('relPickList');
+  if(!list) return;
+  const q = (query||'').trim().toLowerCase();
+  const candidates = relPickCandidates().filter(x=>
+    !q || x.name.toLowerCase().includes(q) || String(x.wbs).toLowerCase().includes(q) || String(x.id).toLowerCase().includes(q)
+  );
+  list.innerHTML = candidates.length
+    ? candidates.map(x=>`
+        <div class="rel-pick-item" onclick="pickRelTask('${x.id}')">
+          <span class="rel-wbs">${x.wbs}</span>
+          <span class="rel-name" title="${x.name}">${x.name}</span>
+        </div>`).join('')
+    : '<div class="rel-pick-empty">找不到符合的任務</div>';
+}
+function pickRelTask(taskId){
+  if(!relPickCtx) return;
+  const {mode, ownerId} = relPickCtx;
+  if(mode==='pred') addPredFromPanel(ownerId, taskId);
+  else addSuccFromPanel(ownerId, taskId);
+  closeRelPicker();
+}
+
 function renderRelPanel(){
   const panel = document.getElementById('relPanel');
   if(!panel) return;
@@ -1716,30 +1845,36 @@ function renderRelPanel(){
       <div class="rel-sub">此為彙總階層，本身不設定前置任務。請點選底下的明細任務查看個別的前後置關係。</div>`;
     return;
   }
-  const preds = (t.preds||[]).map(p=>({task:tasks.find(x=>x.id===p.id), type:p.type, lag:p.lag||0})).filter(x=>x.task);
-  const succs = getSuccessors(t.id);
-  const predCandidates = tasks.filter(x=>!hasKids(x) && x.id!==t.id && !(t.preds||[]).some(p=>p.id===x.id));
-  const addRowHtml = predCandidates.length
-    ? `<div class="rel-add-row">
-         <select id="relAddPredSelect">
-           <option value="">＋ 選擇要新增的前置任務…</option>
-           ${predCandidates.map(x=>`<option value="${x.id}">${x.wbs} ${x.name}</option>`).join('')}
-         </select>
-         <button type="button" class="rel-add-btn" onclick="addPredFromPanel('${t.id}', document.getElementById('relAddPredSelect'))">加入</button>
-       </div>`
-    : '';
+  let preds = (t.preds||[]).map(p=>({task:tasks.find(x=>x.id===p.id), type:p.type, lag:p.lag||0})).filter(x=>x.task);
+  let succs = getSuccessors(t.id);
+  // v28: each column is independently click-to-sortable by 任務名稱/關係/Lag(D) — see relSort/sortRelColumn.
+  if(relSort.pred.key && relSort.pred.dir){
+    preds = preds.slice().sort((a,b)=>{
+      const cmp = compareSortValues(relSortValue(relSort.pred.key,a), relSortValue(relSort.pred.key,b));
+      return relSort.pred.dir===2 ? -cmp : cmp;
+    });
+  }
+  if(relSort.succ.key && relSort.succ.dir){
+    succs = succs.slice().sort((a,b)=>{
+      const cmp = compareSortValues(relSortValue(relSort.succ.key,a), relSortValue(relSort.succ.key,b));
+      return relSort.succ.dir===2 ? -cmp : cmp;
+    });
+  }
   panel.innerHTML = `
     <h3>任務相依關係 — ${t.wbs} ${t.name}</h3>
-    <div class="rel-sub">FS=完成才能開始・SS=同時開始・FF=同時完成・SF=前置開始後此任務才能結束；Lag 正數=延後幾天，負數(Lead)=可提前幾天。可直接調整類型/Lag，或按 × 移除關係。</div>
+    <div class="rel-sub">FS=完成才能開始・SS=同時開始・FF=同時完成・SF=前置開始後此任務才能結束；Lag 正數=延後幾天，負數(Lead)=可提前幾天。可直接調整類型/Lag，或按 × 移除關係；點表頭可排序。</div>
     <div class="rel-cols">
       <div class="rel-col">
         <h4>前置任務（本任務要等它們）</h4>
+        ${relHeaderRowHtml('pred')}
         ${preds.length ? preds.map(x=>relRowHtml('pred', t.id, x)).join('') : '<div class="rel-empty">無前置任務</div>'}
-        ${addRowHtml}
+        <button type="button" class="rel-add-btn" onclick="openRelPicker('pred', '${t.id}')">＋ 新增前置任務</button>
       </div>
       <div class="rel-col">
         <h4>後續任務（等待本任務的項目）</h4>
+        ${relHeaderRowHtml('succ')}
         ${succs.length ? succs.map(x=>relRowHtml('succ', t.id, x)).join('') : '<div class="rel-empty">無後續任務</div>'}
+        <button type="button" class="rel-add-btn" onclick="openRelPicker('succ', '${t.id}')">＋ 新增後續任務</button>
       </div>
     </div>`;
 }
