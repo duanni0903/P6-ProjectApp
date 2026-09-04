@@ -200,6 +200,8 @@
   table.wbs-table thead th{cursor:grab; user-select:none;}
   table.wbs-table thead th.col-drag-over{box-shadow:inset 2px 0 0 var(--primary);}
   table.wbs-table thead th.col-dragging{opacity:.35;}
+  /* click-to-sort indicator arrow shown next to the currently-sorted column's label */
+  .sort-icon{margin-left:3px; color:var(--primary); font-size:10px;}
   /* Excel-style column-width resize handle: a thin grab strip on the right edge of each header cell.
      The <th> is already position:sticky (a positioned element), so this absolutely-positioned handle
      sits relative to it without needing an extra wrapper. Kept fully INSIDE the <th>'s own box
@@ -1008,11 +1010,59 @@ function renderStats(){
     </div>`).join('');
 }
 
+/* ---------- column click-to-sort (view-only: sorts siblings within each WBS level, doesn't
+   touch tasks[] order, t.wbs numbering, or trigger a sync — so the 3rd click cleanly restores
+   the original order simply by clearing the sort state) ---------- */
+let sortColKey = null;   // currently sorted column key, or null
+let sortDir = 0;         // 0 = none (original order), 1 = ascending, 2 = descending
+function sortValue(key, t){
+  switch(key){
+    case 'actId': return t.id;
+    case 'wbs': return t.wbs||'';
+    case 'name': return t.name||'';
+    case 'resp': return t.responsible||'';
+    case 'start': return t.startDate ? t.startDate.getTime() : 0;
+    case 'end': return t.endDate ? t.endDate.getTime() : 0;
+    case 'lateStart': return t.lateStartDate ? t.lateStartDate.getTime() : 0;
+    case 'lateFinish': return t.lateFinishDate ? t.lateFinishDate.getTime() : 0;
+    case 'dur': return t.duration||0;
+    case 'float': return t.float||0;
+    case 'progress': return t.progress||0;
+    case 'budget': return t.budget||0;
+    case 'actual': return t.actual||0;
+    case 'diff': return (t.budget||0)-(t.actual||0);
+    case 'pred': return predRefText(t);
+    case 'succ': return succRefText(t);
+    case 'parentRef': return t.parent||'';
+    case 'milestoneFlag': return t.milestone?1:0;
+    default: return '';
+  }
+}
+function compareSortValues(a, b){
+  if(typeof a==='number' && typeof b==='number') return a-b;
+  return String(a).localeCompare(String(b), 'zh-Hant', {numeric:true, sensitivity:'base'});
+}
+// click a column header: 1st click -> ascending, 2nd click (same column) -> descending,
+// 3rd click -> back to original order; clicking a different column starts fresh at ascending
+function sortByColumn(key){
+  if(sortColKey !== key){ sortColKey = key; sortDir = 1; }
+  else if(sortDir === 1){ sortDir = 2; }
+  else { sortColKey = null; sortDir = 0; }
+  render();
+}
+
 /* ---------- visible rows (respecting collapse, arbitrary depth) ---------- */
 function visibleRows(){
   const rows = [];
   function walk(parentId, depth){
-    tasks.filter(t=>t.parent===parentId).forEach(t=>{
+    let kids = tasks.filter(t=>t.parent===parentId);
+    if(sortColKey && sortDir){
+      kids = kids.slice().sort((a,b)=>{
+        const cmp = compareSortValues(sortValue(sortColKey,a), sortValue(sortColKey,b));
+        return sortDir===2 ? -cmp : cmp;
+      });
+    }
+    kids.forEach(t=>{
       t._depth = depth;
       rows.push(t);
       if(hasKids(t) && !collapsed[t.id]) walk(t.id, depth+1);
@@ -1233,9 +1283,11 @@ function renderTableHeader(){
   const headRow = document.getElementById('wbsHeadRow');
   headRow.innerHTML = cols.map(k=>{
     const m = COLUMN_META[k];
+    const sortIcon = sortColKey===k ? `<span class="sort-icon">${sortDir===1?'▲':'▼'}</span>` : '';
     return `<th style="width:${m.width}px" draggable="true"
       ondragstart="colDragStart(event,'${k}')" ondragover="colDragOver(event,'${k}')" ondragleave="colDragLeave(event)" ondrop="colDrop(event,'${k}')" ondragend="colDragEnd(event)"
-      oncontextmenu="showColMenu(event,'${k}')" title="拖曳表頭文字可調整順序，右鍵可移動/隱藏；拖曳最右邊的邊界可調整寬度">${m.label}<span class="col-resize-handle" draggable="false" ondragstart="event.preventDefault()" onmousedown="colResizeStart(event,'${k}')" onclick="event.stopPropagation()"></span></th>`;
+      onclick="sortByColumn('${k}')"
+      oncontextmenu="showColMenu(event,'${k}')" title="點一下排序（再點一次反向排序，第三次還原原本順序）；拖曳表頭文字可調整欄位順序，右鍵可移動/隱藏；拖曳最右邊的邊界可調整寬度">${m.label}${sortIcon}<span class="col-resize-handle" draggable="false" ondragstart="event.preventDefault()" onmousedown="colResizeStart(event,'${k}')" onclick="event.stopPropagation()"></span></th>`;
   }).join('') + `<th style="width:${ACTIONS_COL_WIDTH}px"></th>`;
 }
 function updateTableWidth(){
