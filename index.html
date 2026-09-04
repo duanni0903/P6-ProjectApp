@@ -1126,7 +1126,7 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'name': {
       const chainIdx = multiSelectIds.indexOf(t.id);
       const chainBadge = chainIdx>=0 ? `<span class="chain-badge" title="Ctrl+點擊選取順序 ${chainIdx+1}">${chainIdx+1}</span>` : '';
-      const nameText = `<span class="task-name-text" ondblclick="startNameEdit(event, '${t.id}')" title="雙擊可直接改名">${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>`;
+      const nameText = `<span class="task-name-text" onclick="startNameEdit(event, '${t.id}')" title="點一下可直接改名">${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>`;
       const nameCell = `<span style="padding-left:${depth*15}px; display:inline-flex; align-items:center; gap:3px" title="${isSum?'':'前置任務: '+predText(t)}">${arrow}${nameText}</span>`;
       return `<td class="col-name" title="${t.name}">${nameCell}${chainBadge}</td>`;
     }
@@ -1242,8 +1242,9 @@ function commitIdEdit(input, id){
   render();
   syncToSheet();
 }
-// quick inline rename — double-click a task's name straight into an editable text box, no need to
-// open the full edit Modal just to change a name. Works on both leaf tasks and summary rows.
+// quick inline rename — one click on a task's name straight into an editable text box (same
+// single-click pattern as the Activity ID / 工期 cells), no need to open the full edit Modal just
+// to change a name. Works on both leaf tasks and summary rows.
 function startNameEdit(e, id){
   e.stopPropagation();
   const t = tasks.find(x=>x.id===id);
