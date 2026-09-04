@@ -54,8 +54,16 @@
 
   /* main split panel */
   .board{display:flex; background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.03);}
-  .wbs-panel{width:932px; flex:none; overflow:auto; max-height:620px; border-right:1px solid var(--border);}
-  .gantt-panel{flex:1; overflow:auto; max-height:620px; position:relative;}
+  .wbs-panel{width:932px; flex:none; overflow:auto; max-height:620px;}
+  .gantt-panel{flex:1; overflow:auto; max-height:620px; position:relative; min-width:120px;}
+  /* drag handle between the WBS table and the Gantt chart — lets the user manually resize how
+     much horizontal space each side gets (independent of the WBS table's own column widths,
+     which otherwise auto-size the panel to fit exactly). Double-click resets to auto-fit. */
+  .board-splitter{flex:none; width:9px; max-height:620px; cursor:col-resize; position:relative;
+    background:var(--panel); border-left:1px solid var(--border); border-right:1px solid var(--border);
+    display:flex; align-items:center; justify-content:center; transition:background-color .1s ease;}
+  .board-splitter:hover, .board-splitter.dragging{background:#e2e8f0;}
+  .board-splitter::before{content:"⋮"; color:var(--text-faint); font-size:13px; letter-spacing:-1px; line-height:1; pointer-events:none;}
 
   table.wbs-table{border-collapse:collapse; width:932px; table-layout:fixed;}
   table.wbs-table thead th{
@@ -279,6 +287,8 @@
         <tbody id="wbsBody"></tbody>
       </table>
     </div>
+    <div class="board-splitter" id="boardSplitter" title="拖曳調整左右寬度；雙擊還原自動寬度"
+      onmousedown="boardSplitterStart(event)" ondblclick="boardSplitterReset()"></div>
     <div class="gantt-panel" id="ganttPanel">
       <div class="gantt-svg-wrap" id="ganttWrap"></div>
     </div>
@@ -1294,10 +1304,46 @@ function renderTableHeader(){
       oncontextmenu="showColMenu(event,'${k}')" title="點一下排序（再點一次反向排序，第三次還原原本順序）；拖曳表頭文字可調整欄位順序，右鍵可移動/隱藏；拖曳最右邊的邊界可調整寬度">${m.label}${sortIcon}<span class="col-resize-handle" draggable="false" ondragstart="event.preventDefault()" onmousedown="colResizeStart(event,'${k}')" onclick="event.stopPropagation()"></span></th>`;
   }).join('') + `<th style="width:${ACTIONS_COL_WIDTH}px"></th>`;
 }
+// null = auto-fit (WBS panel width always matches the sum of its column widths, as before);
+// once the user drags the board splitter, this holds their chosen pixel width instead, and the
+// WBS panel's own overflow:auto lets the table scroll horizontally inside it if the columns no
+// longer fit — see boardSplitterMove() below.
+let wbsPanelWidthOverride = null;
 function updateTableWidth(){
   const total = visibleColumns().reduce((a,k)=>a+COLUMN_META[k].width,0) + ACTIONS_COL_WIDTH;
   document.querySelector('table.wbs-table').style.width = total+'px';
-  document.getElementById('wbsPanel').style.width = total+'px';
+  document.getElementById('wbsPanel').style.width = (wbsPanelWidthOverride!=null ? wbsPanelWidthOverride : total)+'px';
+}
+/* ---------- board splitter: drag to resize WBS-table vs Gantt-chart widths ---------- */
+const MIN_WBS_PANEL_WIDTH = 220;   // keep at least a few columns' worth of the WBS table visible
+const MIN_GANTT_PANEL_WIDTH = 160; // keep at least a sliver of the gantt chart visible
+let splitterStartX = 0, splitterStartWidth = 0;
+function boardSplitterStart(e){
+  e.preventDefault(); // avoid text selection while dragging
+  splitterStartX = e.clientX;
+  splitterStartWidth = document.getElementById('wbsPanel').getBoundingClientRect().width;
+  document.getElementById('boardSplitter').classList.add('dragging');
+  document.addEventListener('mousemove', boardSplitterMove);
+  document.addEventListener('mouseup', boardSplitterEnd);
+}
+function boardSplitterMove(e){
+  const boardWidth = document.querySelector('.board').getBoundingClientRect().width;
+  const splitterWidth = document.getElementById('boardSplitter').getBoundingClientRect().width;
+  const maxWbsWidth = Math.max(MIN_WBS_PANEL_WIDTH, boardWidth - splitterWidth - MIN_GANTT_PANEL_WIDTH);
+  let w = splitterStartWidth + (e.clientX - splitterStartX);
+  w = Math.min(maxWbsWidth, Math.max(MIN_WBS_PANEL_WIDTH, w));
+  wbsPanelWidthOverride = w;
+  document.getElementById('wbsPanel').style.width = w+'px';
+}
+function boardSplitterEnd(){
+  document.getElementById('boardSplitter').classList.remove('dragging');
+  document.removeEventListener('mousemove', boardSplitterMove);
+  document.removeEventListener('mouseup', boardSplitterEnd);
+}
+// double-click the splitter to go back to auto-fit (panel width = sum of visible column widths)
+function boardSplitterReset(){
+  wbsPanelWidthOverride = null;
+  updateTableWidth();
 }
 function renderTable(){
   const critOnly = document.getElementById('critOnly').checked;
