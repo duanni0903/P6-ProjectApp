@@ -646,6 +646,58 @@ let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden inte
 let columnHidden = { parentRef:true, milestoneFlag:true }; // key -> true when hidden
 function visibleColumns(){ return columnOrder.filter(k=>!columnHidden[k]); }
 
+/* ---------- column layout persistence (order / visibility / width) ----------
+   This is purely a per-browser display preference (which columns show, in what order, how wide),
+   not project data — it has nothing to do with the Google Sheet sync, so it's saved to
+   localStorage on THIS device rather than round-tripped through doSync()/loadFromSheet(). Without
+   this, columnOrder/columnHidden/COLUMN_META.*.width were plain in-memory JS variables that reset
+   to the hardcoded defaults above on every page refresh. */
+const COLUMN_LAYOUT_STORAGE_KEY = 'p6lite_column_layout_v1';
+function saveColumnLayout(){
+  try{
+    const widths = {};
+    Object.keys(COLUMN_META).forEach(k=>{ widths[k] = COLUMN_META[k].width; });
+    localStorage.setItem(COLUMN_LAYOUT_STORAGE_KEY, JSON.stringify({
+      order: columnOrder, hidden: columnHidden, widths,
+    }));
+  }catch(err){
+    // localStorage can throw (private browsing, storage disabled, quota) — losing the saved
+    // layout is a minor inconvenience, not worth surfacing an error to the user over
+    console.warn('無法儲存欄位顯示設定', err);
+  }
+}
+function loadColumnLayout(){
+  try{
+    const raw = localStorage.getItem(COLUMN_LAYOUT_STORAGE_KEY);
+    if(!raw) return;
+    const saved = JSON.parse(raw);
+    const knownKeys = Object.keys(COLUMN_META);
+    if(saved && Array.isArray(saved.order)){
+      // only keep saved keys that still exist in COLUMN_META (a future version of this file could
+      // rename/remove a column), then append any current keys the saved layout doesn't know about
+      // yet (e.g. a column added in a later update) so a stale saved layout can never make a
+      // column silently disappear forever
+      const restoredOrder = saved.order.filter(k=>knownKeys.includes(k));
+      knownKeys.forEach(k=>{ if(!restoredOrder.includes(k)) restoredOrder.push(k); });
+      columnOrder = restoredOrder;
+    }
+    if(saved && saved.hidden && typeof saved.hidden==='object'){
+      const restoredHidden = {};
+      Object.keys(saved.hidden).forEach(k=>{ if(knownKeys.includes(k) && saved.hidden[k]) restoredHidden[k] = true; });
+      columnHidden = restoredHidden;
+    }
+    if(saved && saved.widths && typeof saved.widths==='object'){
+      Object.keys(saved.widths).forEach(k=>{
+        const w = Number(saved.widths[k]);
+        if(COLUMN_META[k] && Number.isFinite(w) && w>0) COLUMN_META[k].width = w;
+      });
+    }
+  }catch(err){
+    console.warn('無法讀取欄位顯示設定，使用預設值', err);
+  }
+}
+loadColumnLayout(); // apply before the first render() so there's no flash of the default layout
+
 /* ---------- date / workday helpers ---------- */
 function isWeekend(d){ const g=d.getDay(); return g===0||g===6; }
 function buildWorkdayList(startDate, count){
@@ -1410,6 +1462,7 @@ function colDrop(e, targetKey){
   columnOrder.splice(to,0,dragColKey);
   dragColKey = null;
   renderTable();
+  saveColumnLayout();
 }
 function colDragEnd(e){
   dragColKey = null;
@@ -1451,6 +1504,7 @@ function colResizeEnd(){
   suppressColDrag = false;
   document.removeEventListener('mousemove', colResizeMove);
   document.removeEventListener('mouseup', colResizeEnd);
+  saveColumnLayout(); // persist the final width once the drag actually ends (not on every mousemove)
 }
 
 /* ---------- column right-click menu: move left/right, hide ---------- */
@@ -1490,6 +1544,7 @@ function moveColumn(key, dir){
   const a = columnOrder.indexOf(key), b = columnOrder.indexOf(otherKey);
   columnOrder[a] = otherKey; columnOrder[b] = key;
   renderTable();
+  saveColumnLayout();
 }
 function colMoveLeft(){ if(colCtxTarget!=null) moveColumn(colCtxTarget, -1); hideColMenu(); }
 function colMoveRight(){ if(colCtxTarget!=null) moveColumn(colCtxTarget, 1); hideColMenu(); }
@@ -1498,6 +1553,7 @@ function hideColumn(key){
   columnHidden[key] = true;
   renderTable();
   renderColPanel();
+  saveColumnLayout();
 }
 function colHideCurrent(){ if(colCtxTarget!=null) hideColumn(colCtxTarget); hideColMenu(); }
 
@@ -1527,6 +1583,7 @@ function toggleColumnVisible(key, visible){
   }
   renderTable();
   renderColPanel();
+  saveColumnLayout();
 }
 document.addEventListener('click', function(e){
   const panel = document.getElementById('colPanel');
