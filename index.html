@@ -1327,9 +1327,14 @@ function boardSplitterStart(e){
   document.addEventListener('mouseup', boardSplitterEnd);
 }
 function boardSplitterMove(e){
-  const boardWidth = document.querySelector('.board').getBoundingClientRect().width;
+  // use the .app container's width as the "available width" reference, not .board's own rect —
+  // .board can itself be overflowing (wbsPanel's natural column-sum width can exceed the viewport,
+  // which is exactly the situation this splitter exists to let the user fix), so measuring .board
+  // directly would produce a moving/unreliable cap. .app is bounded by its own max-width/viewport
+  // and never overflows, so it's a stable reference for "how much room the whole row actually has".
+  const availWidth = document.querySelector('.app').getBoundingClientRect().width;
   const splitterWidth = document.getElementById('boardSplitter').getBoundingClientRect().width;
-  const maxWbsWidth = Math.max(MIN_WBS_PANEL_WIDTH, boardWidth - splitterWidth - MIN_GANTT_PANEL_WIDTH);
+  const maxWbsWidth = Math.max(MIN_WBS_PANEL_WIDTH, availWidth - splitterWidth - MIN_GANTT_PANEL_WIDTH);
   let w = splitterStartWidth + (e.clientX - splitterStartX);
   w = Math.min(maxWbsWidth, Math.max(MIN_WBS_PANEL_WIDTH, w));
   wbsPanelWidthOverride = w;
