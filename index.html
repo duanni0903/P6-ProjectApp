@@ -197,9 +197,13 @@
   .ctx-sep{height:1px; background:var(--border); margin:5px 2px;}
 
   /* draggable / hideable table columns */
-  table.wbs-table thead th{cursor:grab; user-select:none;}
+  table.wbs-table thead th{cursor:grab; user-select:none; transition:background-color .08s ease, transform .08s ease;}
   table.wbs-table thead th.col-drag-over{box-shadow:inset 2px 0 0 var(--primary);}
   table.wbs-table thead th.col-dragging{opacity:.35;}
+  /* click-to-sort tactile feedback: a light hover tint, then a "pressed" nudge + darker tint
+     while the mouse button is actually held down, like a real button press */
+  table.wbs-table thead th:hover{background-color:#f1f5f9;}
+  table.wbs-table thead th:active{transform:translateY(1px) scale(.98); background-color:#e2e8f0;}
   /* click-to-sort indicator arrow shown next to the currently-sorted column's label */
   .sort-icon{margin-left:3px; color:var(--primary); font-size:10px;}
   /* Excel-style column-width resize handle: a thin grab strip on the right edge of each header cell.
