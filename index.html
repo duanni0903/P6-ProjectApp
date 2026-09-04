@@ -451,6 +451,61 @@ let selectedId = null;  // currently clicked/selected task row
 let clipboardId = null; // task cut with Ctrl+X, waiting to be pasted
 let multiSelectIds = []; // ordered list of task ids built by Ctrl/Cmd+click, in click order — used to chain-link dependencies
 
+/* ---------- owners (責任者名冊，接「負責人」試算表分頁) ----------
+   {name, contact, dept} — name is the key (matches task.responsible free-text values). contact/dept are
+   opaque pass-through fields: this app has no UI to edit them, they're meant to be typed directly into
+   the Google Sheet's 負責人 分頁, and this app just round-trips them (load → keep in memory → write back
+   unchanged) so a manual edit in the Sheet never gets wiped by the next auto-sync. Workload stats
+   (taskCount/inProgress/done/totalDuration/totalBudget/totalActual/criticalCount) are recomputed fresh
+   every render from the current tasks — same "computed report column" pattern as float/diff on tasks. */
+let owners = [
+  // sample contact/dept info for the built-in demo — matches the `responsible` values used in the
+  // sample tasks above. This is the ONLY data owners[] starts with; workload stats (taskCount/
+  // totalBudget/...) are never hand-written here, computeOwners() fills those in on first render.
+  {name:'王經理', contact:'wang@example.com', dept:'專案管理部'},
+  {name:'陳建築師', contact:'chen-arch@example.com', dept:'建築設計'},
+  {name:'李結構技師', contact:'li-struct@example.com', dept:'結構工程'},
+  {name:'林機電技師', contact:'lin-mep@example.com', dept:'機電工程'},
+  {name:'張採購', contact:'zhang-po@example.com', dept:'採購部'},
+  {name:'吳工地主任', contact:'wu-site@example.com', dept:'工地管理'},
+  {name:'周鋼構工程師', contact:'zhou-steel@example.com', dept:'結構工程'},
+  {name:'陳室內設計師', contact:'chen-id@example.com', dept:'室內裝修'},
+];
+function computeOwners(){
+  const map = {};
+  owners.forEach(o=>{
+    if(!o || !o.name) return;
+    map[o.name] = {name:o.name, contact:o.contact||'', dept:o.dept||'',
+      taskCount:0, inProgress:0, done:0, totalDuration:0, totalBudget:0, totalActual:0, criticalCount:0};
+  });
+  tasks.filter(t=>!hasKids(t) && t.responsible).forEach(t=>{
+    const n = t.responsible;
+    if(!map[n]) map[n] = {name:n, contact:'', dept:'', taskCount:0, inProgress:0, done:0, totalDuration:0, totalBudget:0, totalActual:0, criticalCount:0};
+    const o = map[n];
+    o.taskCount++;
+    if((t.progress||0)>=100) o.done++; else if((t.progress||0)>0) o.inProgress++;
+    o.totalDuration += t.duration||0;
+    o.totalBudget += t.budget||0;
+    o.totalActual += t.actual||0;
+    if(t.critical) o.criticalCount++;
+  });
+  owners = Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  return owners;
+}
+// flattened one-row-per-relationship report for the Google Sheet's 關係 分頁 — purely a derived/read-only
+// export (like successor on the tasks sheet), never read back as input: the real, editable source of
+// truth for relationships stays the "前置任務" JSON column on each task, exactly as before.
+function computeRelationships(){
+  const rows = [];
+  tasks.forEach(t=>{
+    (t.preds||[]).forEach(p=>{
+      const fromT = tasks.find(x=>x.id===p.id);
+      rows.push({fromId:p.id, fromName:fromT?fromT.name:'', toId:t.id, toName:t.name, type:p.type, lag:p.lag||0});
+    });
+  });
+  return rows;
+}
+
 /* ---------- Google Sheet sync ----------
    True inputs (id/parent/name/duration/responsible/budget/actual/progress/milestone/preds) are the
    only fields that matter on load — everything else (wbs, ES/EF/LS/LF dates, float, diff, critical,
@@ -492,7 +547,9 @@ function syncToSheet(){
   syncTimer = setTimeout(doSync, 500);
 }
 function doSync(){
-  const payload = JSON.stringify({ token: API_TOKEN, tasks: tasks.map(stripForSync) });
+  // owners' workload stats are already fresh (computeSchedule() calls computeOwners() on every render);
+  // relationships is a pure derived snapshot built fresh here, never stored in a global
+  const payload = JSON.stringify({ token: API_TOKEN, tasks: tasks.map(stripForSync), owners: owners, relationships: computeRelationships() });
   // text/plain avoids a CORS preflight (OPTIONS) request, which Apps Script Web Apps don't handle —
   // sending JSON as a plain-text body and parsing it server-side (JSON.parse(e.postData.contents)) is
   // the standard workaround for POSTing to an Apps Script Web App from a page hosted elsewhere
@@ -514,11 +571,14 @@ async function loadFromSheet(){
   try{
     const res = await fetch(SHEET_API_URL, { method:'GET' });
     const data = await res.json();
-    if(Array.isArray(data) && data.length){
+    // doGet now returns { tasks:[...], owners:[...] } (not a bare array) — owners is the 負責人 分頁's
+    // editable name/contact/dept rows; relationships is never read back (see computeRelationships()).
+    const taskData = data && Array.isArray(data.tasks) ? data.tasks : null;
+    if(taskData && taskData.length){
       // ids/parent/preds[].id always travel as strings inside the app (see genNextId() above) —
       // coerce here in case the Sheet ever hands back a bare number (e.g. a cell Google Sheets
       // auto-typed as numeric), so a strict `===` comparison never silently fails downstream.
-      tasks = data.map(t=>({
+      tasks = taskData.map(t=>({
         ...t,
         id: String(t.id),
         parent: (t.parent===null || t.parent===undefined || t.parent==='') ? null : String(t.parent),
@@ -531,6 +591,7 @@ async function loadFromSheet(){
         return (Number.isFinite(n) && String(n)===t.id) ? Math.max(m,n) : m;
       }, 0);
       collapsed = {}; selectedId = null; clipboardId = null; multiSelectIds = [];
+      owners = Array.isArray(data.owners) ? data.owners.map(o=>({name:String(o.name||''), contact:o.contact?String(o.contact):'', dept:o.dept?String(o.dept):''})).filter(o=>o.name) : [];
       setSyncStatus('ok', '已從 Google Sheet 載入');
     } else {
       setSyncStatus('offline', 'Google Sheet 目前是空的，先顯示內建範例資料（新增或編輯任務後會自動寫入）');
@@ -902,6 +963,8 @@ function computeSchedule(){
     s.critical = kids.some(k=>k.critical);
   }
   tasks.filter(t=>t.parent===null && hasKids(t)).forEach(rollup);
+
+  computeOwners(); // refresh 負責人 workload stats from the schedule/budget numbers just computed above
 
   return { projectDuration };
 }
@@ -1584,6 +1647,7 @@ document.getElementById('ganttPanel').addEventListener('scroll', function(){
 /* ---------- modal: add / edit ---------- */
 function respOptions(){
   const set = new Set(tasks.filter(t=>!hasKids(t) && t.responsible).map(t=>t.responsible));
+  owners.forEach(o=>{ if(o.name) set.add(o.name); }); // include people entered in the 負責人 sheet even if not currently assigned to any task
   return [...set];
 }
 function openAddModal(presetParent){
