@@ -442,7 +442,7 @@
       not recommended once the page is public).
    3. Until SHEET_API_URL is filled in, the page runs entirely offline on the built-in
       sample data below — nothing is lost, it just won't sync anywhere. */
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwaDvA-PAO0eTBNTv-1vkfPPnQu1LWCB4awcFYVcqgStAS3P6hVzM4Rkj34qlbxSwtH/exec';
+const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwaDvA-PAO0eTBNTv-1vkfPPnQu1LWCB4awcFYVcqgStAS3P6hVzM4Rkj34qlbxSwtH/exec'; // e.g. https://script.google.com/macros/s/AKfycb.../exec
 const API_TOKEN = '123456789';
 const SHEET_CONFIGURED = !!SHEET_API_URL && SHEET_API_URL.indexOf('PASTE_') !== 0;
 
@@ -1726,7 +1726,7 @@ function relRowHtml(mode, ownerId, x){
         <option value="SF" ${x.type==='SF'?'selected':''}>SF</option>
       </select>
       <input type="number" class="rel-lag-input" value="${lag}" title="正數=延後(Lag)天，負數=提前(Lead)天" onchange="setRelLag('${taskId}','${predId}', this.value)">
-      <button type="button" class="rel-remove" title="移除此相依關係" onclick="removeRel('${taskId}','${predId}')">×</button>
+      <button type="button" class="rel-remove" title="移除此相依關係" onclick="confirmRemoveRel('${taskId}','${predId}')">×</button>
     </div>`;
 }
 function findPredEntry(taskId, predId){
@@ -1751,6 +1751,15 @@ function removeRel(taskId, predId){
   if(!t) return;
   t.preds = (t.preds||[]).filter(p=>p.id!==predId);
   render(); syncToSheet();
+}
+// v29: the × button asks for confirmation before removing — mirrors deleteTaskById's confirm()
+// pattern elsewhere in the app. removeRel() itself stays a pure, unconfirmed mutator so callers that
+// intentionally bypass the dialog (e.g. programmatic cleanup) are unaffected.
+function confirmRemoveRel(taskId, predId){
+  const other = tasks.find(x=>x.id===predId);
+  const label = other ? other.name : predId;
+  if(!confirm(`確定要移除與「${label}」的相依關係嗎？`)) return;
+  removeRel(taskId, predId);
 }
 // Adds a predecessor relationship to `ownerId` (defaults to FS/Lag 0, consistent with
 // fillPredList's default for a freshly-checked box) — the user can then adjust type/lag inline
