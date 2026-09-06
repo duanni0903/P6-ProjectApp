@@ -112,6 +112,10 @@
   /* gantt */
   .gantt-header{position:sticky; top:0; z-index:3; background:#f8fafc;}
   .gantt-svg-wrap{position:relative;}
+  /* v30: drag-to-zoom overlay sitting on top of the SVG's date-header band — see ganttZoomStart() */
+  .gantt-zoom-handle{position:absolute; left:0; top:0; z-index:2; cursor:ew-resize;}
+  .gantt-zoom-handle:hover{background:rgba(59,130,246,.07);}
+  .gantt-zoom-handle.dragging{background:rgba(59,130,246,.14);}
   svg{display:block;}
   .month-band{fill:#f8fafc;}
   .month-band.alt{fill:#eef2f7;}
@@ -504,6 +508,15 @@ function genNextId(){
 
 const PROJECT_START = new Date(2026, 8, 7); // 2026-09-07 (Mon)
 let zoom = 'week'; // 'week' | 'month'
+// v30: continuous Gantt timescale zoom. ganttPxPerDay is the single source of truth for the
+// horizontal scale — every x-coordinate in renderGantt() is derived from it via xOfDate(), so
+// changing this one number stretches/shrinks ALL date columns together, exactly like dragging
+// the timescale ruler in P6. The 日/週/月 buttons just set it to a preset; dragging the header
+// (see ganttZoomStart/Move/End below) sets it continuously instead.
+let ganttPxPerDay = 20;
+let ganttZoomDragging = false;
+const GANTT_MIN_PX_PER_DAY = 3, GANTT_MAX_PX_PER_DAY = 120;
+const GANTT_ZOOM_PRESETS = { day: 40, week: 20, month: 7 };
 let collapsed = {}; // summaryId -> bool
 let editingId = null;
 let selectedId = null;  // currently clicked/selected task row
@@ -1891,16 +1904,59 @@ function renderRelPanel(){
 /* ---------- gantt ---------- */
 function setZoom(z){
   zoom = z;
-  document.getElementById('zoomDay').classList.toggle('active', z==='day');
-  document.getElementById('zoomWeek').classList.toggle('active', z==='week');
-  document.getElementById('zoomMonth').classList.toggle('active', z==='month');
+  ganttPxPerDay = GANTT_ZOOM_PRESETS[z];
+  syncZoomButtonsActive();
   renderGantt();
+}
+// A button reads as "active" only when ganttPxPerDay exactly matches its preset — once the user has
+// dragged the timescale to a custom width (see below), none of the three necessarily match anymore,
+// so all three correctly go inactive rather than leaving a stale button highlighted.
+function syncZoomButtonsActive(){
+  document.getElementById('zoomDay').classList.toggle('active', ganttPxPerDay===GANTT_ZOOM_PRESETS.day);
+  document.getElementById('zoomWeek').classList.toggle('active', ganttPxPerDay===GANTT_ZOOM_PRESETS.week);
+  document.getElementById('zoomMonth').classList.toggle('active', ganttPxPerDay===GANTT_ZOOM_PRESETS.month);
+}
+
+/* ---------- v30: drag-to-zoom the Gantt timescale (P6-style) ----------
+   Click-drag anywhere on the date header stretches or shrinks ganttPxPerDay continuously; dragging
+   right (stretching) zooms in, dragging left zooms out. The date sitting directly under the cursor
+   is kept pinned to the same screen position while dragging (like a map zoom), by adjusting the
+   panel's scrollLeft to compensate each time ganttPxPerDay changes — otherwise the visible date
+   range would jump around as the timeline stretches underneath a fixed scroll offset. */
+let ganttZoomStartX = 0, ganttZoomStartPxPerDay = 20, ganttZoomAnchorDay = 0, ganttZoomAnchorScreenX = 0;
+function ganttZoomStart(e){
+  e.preventDefault(); // avoid text selection while dragging
+  const panel = document.getElementById('ganttPanel');
+  const rect = panel.getBoundingClientRect();
+  ganttZoomStartX = e.clientX;
+  ganttZoomStartPxPerDay = ganttPxPerDay;
+  ganttZoomAnchorScreenX = e.clientX - rect.left;
+  ganttZoomAnchorDay = (panel.scrollLeft + ganttZoomAnchorScreenX) / ganttPxPerDay;
+  ganttZoomDragging = true;
+  renderGantt(); // so the handle picks up the .dragging highlight immediately
+  document.addEventListener('mousemove', ganttZoomMove);
+  document.addEventListener('mouseup', ganttZoomEnd);
+}
+function ganttZoomMove(e){
+  const delta = e.clientX - ganttZoomStartX;
+  let px = ganttZoomStartPxPerDay + delta * 0.15; // ~150px drag ≈ +/-22.5 px/day — feels continuous, not twitchy
+  px = Math.max(GANTT_MIN_PX_PER_DAY, Math.min(GANTT_MAX_PX_PER_DAY, px));
+  ganttPxPerDay = px;
+  renderGantt();
+  document.getElementById('ganttPanel').scrollLeft = ganttZoomAnchorDay*ganttPxPerDay - ganttZoomAnchorScreenX;
+}
+function ganttZoomEnd(){
+  ganttZoomDragging = false;
+  syncZoomButtonsActive();
+  renderGantt();
+  document.removeEventListener('mousemove', ganttZoomMove);
+  document.removeEventListener('mouseup', ganttZoomEnd);
 }
 
 function renderGantt(){
   const critOnly = document.getElementById('critOnly').checked;
   const rows = visibleRows().filter(t=> !(critOnly && !t.critical));
-  const pxPerDay = zoom==='day' ? 40 : (zoom==='week' ? 20 : 7);
+  const pxPerDay = ganttPxPerDay;
   const rowH = 34, headerH = 56;
   const s = getStats();
   const totalDays = Math.max(30, Math.ceil((s.endDate-PROJECT_START)/86400000) + 10);
@@ -1925,15 +1981,17 @@ function renderGantt(){
     monthLabels += `<text class="month-text" x="${x0+6}" y="18">${fmtYM(monthCursor)}</text>`;
     monthCursor = nextMonth; mi++;
   }
-  // day/week gridlines + date labels (day zoom: every calendar day; week/month zoom: every 7 days)
+  // day/week/~month gridlines + date labels. Ticks step by whatever keeps labels from crowding at
+  // the CURRENT (continuously-drag-adjustable) pxPerDay, rather than a fixed per-mode step — so the
+  // header keeps relabeling itself smoothly as the timescale is stretched or shrunk, same as P6.
   let wk = new Date(PROJECT_START);
-  const dayStep = zoom==='day' ? 1 : 7;
+  let dayStep = 1;
+  if(pxPerDay*dayStep < 44) dayStep = 7;
+  if(pxPerDay*dayStep < 44) dayStep = 28;
   while(xOfDate(wk) < width){
     const x = xOfDate(wk);
     gridLines += `<line class="grid-line" x1="${x}" y1="${headerH}" x2="${x}" y2="${headerH+rows.length*rowH}"></line>`;
-    if(zoom==='day' || zoom==='week' || wk.getDay()===1){
-      monthLabels += `<text class="axis-text" x="${x+3}" y="40">${fmtShort(wk)}</text>`;
-    }
+    monthLabels += `<text class="axis-text" x="${x+3}" y="40">${fmtShort(wk)}</text>`;
     wk.setDate(wk.getDate() + dayStep);
   }
   // horizontal row separators
@@ -2027,7 +2085,9 @@ function renderGantt(){
     ${arrows}
     ${bars}
     ${todayLine}
-  </svg>`;
+  </svg>
+  <div class="gantt-zoom-handle${ganttZoomDragging?' dragging':''}" style="width:${width}px; height:${headerH}px;"
+       title="拖曳調整時間刻度寬度（像 P6 一樣，全部日期會一起縮放）" onmousedown="ganttZoomStart(event)"></div>`;
   document.getElementById('ganttWrap').innerHTML = svg;
 }
 
