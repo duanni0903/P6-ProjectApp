@@ -47,6 +47,7 @@
   .btn:hover{background:#f8fafc;}
   .btn.primary{background:var(--primary); border-color:var(--primary); color:#fff;}
   .btn.primary:hover{background:var(--primary-dark);}
+  .btn:disabled{opacity:.4; cursor:default; pointer-events:none;}
   .toolbar .spacer{flex:1;}
   .toggle{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-dim); cursor:pointer; user-select:none;}
   .toggle input{accent-color:var(--danger);}
@@ -246,6 +247,8 @@
   .sync-status.sync-error::before{background:var(--danger);}
   .sync-status.sync-offline{color:var(--text-faint);}
   .sync-status.sync-offline::before{background:var(--text-faint);}
+  .sync-status.sync-dirty{color:var(--warning);}
+  .sync-status.sync-dirty::before{background:var(--warning); animation:pulse 1s ease-in-out infinite;}
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
   .ctx-sep{height:1px; background:var(--border); margin:5px 2px;}
 
@@ -284,7 +287,10 @@
     </div>
     <div style="text-align:right">
       <div class="sub" id="metaLine"></div>
-      <div class="sync-status sync-offline" id="syncStatus">尚未連線</div>
+      <div style="display:flex; align-items:center; gap:8px; justify-content:flex-end; margin-top:2px;">
+        <div class="sync-status sync-offline" id="syncStatus">尚未連線</div>
+        <button class="btn primary" id="syncNowBtn" onclick="manualSync()" title="把目前尚未同步的變更寫回 Google Sheet">💾 同步</button>
+      </div>
     </div>
   </div>
 
@@ -292,6 +298,8 @@
 
   <div class="toolbar">
     <button class="btn primary" onclick="quickAddTask()">＋ 新增任務</button>
+    <button class="btn" id="undoBtn" onclick="undo()" title="復原上一步變更（Ctrl+Z）" disabled>↶ 上一步</button>
+    <button class="btn" id="redoBtn" onclick="redo()" title="重做（Ctrl+Shift+Z）" disabled>↷ 下一步</button>
     <label class="toggle"><input type="checkbox" id="critOnly" onchange="render()"> 只顯示關鍵路徑</label>
     <div class="col-panel-wrap">
       <button class="btn" id="colPanelBtn" onclick="toggleColPanel(event)" title="勾選要顯示的欄位">☰ 欄位顯示</button>
@@ -688,6 +696,17 @@ let selectedId = null;  // currently clicked/selected task row
 let clipboardId = null; // task cut with Ctrl+X, waiting to be pasted
 let multiSelectIds = []; // ordered list of task ids built by Ctrl/Cmd+click, in click order — used to chain-link dependencies
 
+/* ---------- v39: local undo/redo + manual-only sync ----------
+   Editing used to sync to the Google Sheet immediately after every change. That made an "上一步"
+   (undo) button meaningless — by the time you could click it, the change was already written back.
+   So editing is now purely local: every task-mutating action pushes a pre-change snapshot onto
+   undoStack (and clears redoStack, since a fresh edit invalidates any redone-away future). Nothing
+   reaches the Sheet until the person explicitly clicks the "💾 同步" button (manualSync()). */
+let undoStack = [];
+let redoStack = [];
+const UNDO_LIMIT = 50;
+let dirty = false; // true = local tasks[] has changes not yet written to the Sheet
+
 /* ---------- owners (責任者名冊，接「負責人」試算表分頁) ----------
    {name, contact, dept} — name is the key (matches task.responsible free-text values). contact/dept are
    opaque pass-through fields: this app has no UI to edit them, they're meant to be typed directly into
@@ -837,15 +856,75 @@ function stripForSync(t){
     float:t.float||0, diff:(t.budget||0)-(t.actual||0),
   };
 }
+/* ---------- v39: undo/redo history + manual-only sync ----------
+   Deep-clones only the fields a person can actually edit (same input fields stripForSync sends,
+   minus its report-only computed columns) — computeSchedule() rebuilds everything else (dates,
+   ES/EF/LS/LF, float, wbs numbering) fresh on every render(), so none of that needs to ride along. */
+function snapshotTasks(){
+  return tasks.map(t => ({
+    id:t.id, parent:t.parent===undefined?null:t.parent, name:t.name||'',
+    duration:t.duration, responsible:t.responsible||'', budget:t.budget||0,
+    actual:t.actual||0, progress:t.progress||0, milestone:!!t.milestone,
+    preds:(t.preds||[]).map(p=>({id:p.id, type:p.type, lag:p.lag||0})),
+  }));
+}
+function cloneSnapshot(snap){
+  return snap.map(t=>({...t, preds:(t.preds||[]).map(p=>({...p}))}));
+}
+// Call BEFORE mutating `tasks` (const _pre = snapshotTasks();) — then, only once the mutation has
+// actually happened (several edit handlers bail out early on invalid/no-op/cancelled input), call
+// pushUndoSnapshot(_pre) in place of what used to be an immediate syncToSheet() call.
+function pushUndoSnapshot(preSnap){
+  if(JSON.stringify(snapshotTasks())===JSON.stringify(preSnap)) return; // no actual change — nothing to undo
+  undoStack.push(preSnap);
+  if(undoStack.length > UNDO_LIMIT) undoStack.shift();
+  redoStack = []; // a new edit invalidates whatever redo history existed
+  markDirty();
+}
+function undo(){
+  if(!undoStack.length) return;
+  redoStack.push(snapshotTasks());
+  tasks = cloneSnapshot(undoStack.pop());
+  selectedId = null; clipboardId = null; multiSelectIds = [];
+  render();
+  updateClipboardBar(); updateChainBar();
+  markDirty();
+}
+function redo(){
+  if(!redoStack.length) return;
+  undoStack.push(snapshotTasks());
+  tasks = cloneSnapshot(redoStack.pop());
+  selectedId = null; clipboardId = null; multiSelectIds = [];
+  render();
+  updateClipboardBar(); updateChainBar();
+  markDirty();
+}
+function updateUndoRedoButtons(){
+  const u = document.getElementById('undoBtn'), r = document.getElementById('redoBtn');
+  if(u) u.disabled = undoStack.length===0;
+  if(r) r.disabled = redoStack.length===0;
+}
+// marks the local edit as not-yet-synced — shows "有尚未同步的變更" until the person clicks 💾 同步
+// (doSync()'s own saving/ok/error handling takes over the status line for the duration of an actual sync)
+function markDirty(){
+  dirty = true;
+  updateUndoRedoButtons();
+  if(SHEET_CONFIGURED) setSyncStatus('dirty', '有尚未同步的變更');
+}
+function updateSyncButton(){
+  const btn = document.getElementById('syncNowBtn');
+  if(btn) btn.disabled = !SHEET_CONFIGURED;
+}
 let syncTimer = null;
-// called after every function that actually mutates `tasks` (add/edit/delete/move/link) —
-// debounced so a burst of changes (e.g. deleting a subtree) only triggers one write
+// only runs when the person clicks "💾 同步" (manualSync()) or a test calls it directly — editing no
+// longer triggers this automatically, so undo/redo stay meaningful right up until an explicit sync
 function syncToSheet(){
   if(!SHEET_CONFIGURED){ setSyncStatus('offline', '尚未設定 Google Sheet 連線（目前僅在本機記憶體中編輯，重新整理會遺失）'); return; }
   setSyncStatus('saving', '同步中…');
   clearTimeout(syncTimer);
   syncTimer = setTimeout(doSync, 500);
 }
+function manualSync(){ syncToSheet(); }
 function doSync(){
   // owners' workload stats are already fresh (computeSchedule() calls computeOwners() on every render);
   // relationships is a pure derived snapshot built fresh here, never stored in a global
@@ -856,12 +935,13 @@ function doSync(){
   fetch(SHEET_API_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: payload })
     .then(r=>r.json())
     .then(res=>{
-      if(res && res.ok) setSyncStatus('ok', '已同步到 Google Sheet');
+      if(res && res.ok){ dirty = false; setSyncStatus('ok', '已同步到 Google Sheet'); }
       else setSyncStatus('error', '同步失敗：' + (res && res.error || '未知錯誤'));
     })
     .catch(()=>{ setSyncStatus('error', '同步失敗（連不上 Google Sheet，可能是網路問題或部署設定）'); });
 }
 async function loadFromSheet(){
+  updateSyncButton();
   if(!SHEET_CONFIGURED){
     setSyncStatus('offline', '尚未設定 Google Sheet 連線（目前顯示內建範例資料）');
     render();
@@ -906,11 +986,15 @@ async function loadFromSheet(){
       owners = Array.isArray(data.owners) ? data.owners.map(o=>({name:String(o.name||''), contact:o.contact?String(o.contact):'', dept:o.dept?String(o.dept):''})).filter(o=>o.name) : [];
       setSyncStatus('ok', '已從 Google Sheet 載入');
     } else {
-      setSyncStatus('offline', 'Google Sheet 目前是空的，先顯示內建範例資料（新增或編輯任務後會自動寫入）');
+      setSyncStatus('offline', 'Google Sheet 目前是空的，先顯示內建範例資料（新增或編輯後按「💾 同步」寫入）');
     }
   }catch(err){
     setSyncStatus('error', '無法連線到 Google Sheet，目前顯示內建範例資料（離線模式）');
   }
+  // a fresh load matches the Sheet exactly (or is a clean offline/demo start) — any undo/redo history
+  // from a previous project's session shouldn't carry over into this one
+  undoStack = []; redoStack = []; dirty = false;
+  updateUndoRedoButtons(); updateSyncButton();
   render();
 }
 
@@ -1104,22 +1188,24 @@ function indentTask(id){
   const siblings = tasks.filter(x=>x.parent===t.parent);
   const idx = siblings.findIndex(x=>x.id===id);
   if(idx<=0) return; // no preceding sibling to become a child of
+  const _pre = snapshotTasks();
   const newParent = siblings[idx-1];
   demoteToSummary(newParent);
   t.parent = newParent.id;
   moveTaskAfterSubtree(t, newParent.id);
   collapsed[newParent.id] = false;
   render();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
 }
 function outdentTask(id){
   const t = tasks.find(x=>x.id===id); if(!t) return;
   if(t.parent===null) return; // already top-level
+  const _pre = snapshotTasks();
   const oldParent = tasks.find(x=>x.id===t.parent);
   t.parent = oldParent.parent;
   moveTaskAfterSubtree(t, oldParent.id);
   render();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
 }
 
 /* ---------- click-to-select + Ctrl+X / Ctrl+V move (Project-style cut & paste) ---------- */
@@ -1175,6 +1261,7 @@ function chainLinkTasks(){
   const chain = multiSelectIds.map(id=>tasks.find(t=>t.id===id));
   const badIdx = chain.findIndex(t=>!t || hasKids(t));
   if(badIdx>=0){ alert('彙總階層（有子任務的階層列）不能設定相依關係，請只選明細任務再串聯。'); return; }
+  const _pre = snapshotTasks();
   for(let i=1;i<chain.length;i++){
     const t = chain[i], predId = chain[i-1].id;
     if(predId===t.id) continue; // guards a same-task no-op, shouldn't normally happen
@@ -1191,7 +1278,7 @@ function chainLinkTasks(){
   selectedId = lastId;
   render();
   updateChainBar();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
 }
 function updateClipboardBar(){
   const bar = document.getElementById('clipboardBar');
@@ -1220,6 +1307,7 @@ function pasteTask(){
   const src = tasks.find(x=>x.id===clipboardId);
   const target = tasks.find(x=>x.id===selectedId);
   if(!src || !target) return;
+  const _pre = snapshotTasks();
   src.parent = target.parent;
   const idx = tasks.indexOf(src);
   if(idx>=0) tasks.splice(idx,1);
@@ -1229,7 +1317,7 @@ function pasteTask(){
   selectedId = src.id;
   render();
   updateClipboardBar();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
 }
 document.addEventListener('keydown', function(e){
   const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
@@ -1240,10 +1328,21 @@ document.addEventListener('keydown', function(e){
     if(selectedId!=null){ e.preventDefault(); cutTask(); }
   } else if((e.ctrlKey||e.metaKey) && key==='v'){
     if(clipboardId!=null && selectedId!=null){ e.preventDefault(); pasteTask(); }
+  } else if((e.ctrlKey||e.metaKey) && key==='z' && !e.shiftKey){
+    e.preventDefault(); undo();
+  } else if((e.ctrlKey||e.metaKey) && (key==='y' || (key==='z' && e.shiftKey))){
+    e.preventDefault(); redo();
   } else if(e.key==='Escape' && (clipboardId!=null || multiSelectIds.length)){
     if(clipboardId!=null) cancelCut();
     if(multiSelectIds.length) clearChainSelect();
   }
+});
+// warn before leaving the page with local edits that haven't been synced to the Google Sheet yet —
+// closing/reloading loses anything not yet pushed via 💾 同步 since editing is purely local now (v39)
+window.addEventListener('beforeunload', function(e){
+  if(!dirty) return;
+  e.preventDefault();
+  e.returnValue = '';
 });
 
 /* ---------- CPM schedule (supports FS / SS / FF / SF + lag) ---------- */
@@ -1534,7 +1633,7 @@ function commitDurEdit(input, id){
   const t = tasks.find(x=>x.id===id);
   if(!t){ render(); return; }
   const v = Math.max(1, Math.round(Number(input.value)) || t.duration);
-  if(v !== t.duration){ t.duration = v; render(); syncToSheet(); }
+  if(v !== t.duration){ const _pre = snapshotTasks(); t.duration = v; render(); pushUndoSnapshot(_pre); }
   else { render(); }
 }
 // quick inline edit for Activity ID — single click straight into a text box, same affordance as the
@@ -1577,6 +1676,7 @@ function commitIdEdit(input, id){
     render();
     return;
   }
+  const _pre = snapshotTasks();
   const oldId = id;
   t.id = v;
   // cascade the rename to every other task that referenced the old id, plus any UI state keyed by it —
@@ -1593,7 +1693,7 @@ function commitIdEdit(input, id){
   if(msIdx>=0) multiSelectIds[msIdx] = v;
   if(collapsed[oldId]!==undefined){ collapsed[v] = collapsed[oldId]; delete collapsed[oldId]; }
   render();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
 }
 // quick inline rename — one click on a task's name straight into an editable text box (same
 // single-click pattern as the Activity ID / 工期 cells), no need to open the full edit Modal just
@@ -1618,7 +1718,7 @@ function commitNameEdit(input, id){
   const t = tasks.find(x=>x.id===id);
   if(!t){ render(); return; }
   const v = input.value.trim();
-  if(v && v!==t.name){ t.name = v; render(); syncToSheet(); }
+  if(v && v!==t.name){ const _pre = snapshotTasks(); t.name = v; render(); pushUndoSnapshot(_pre); }
   else { render(); } // empty name is rejected — keep the old one rather than leaving a blank task
 }
 // adds a brand-new task directly into the table — no Modal — and immediately puts its name cell
@@ -1628,6 +1728,7 @@ function commitNameEdit(input, id){
 // that one is for editing an existing task's full details — duration/budget/predecessors etc).
 function quickAddTask(presetParent){
   const parent = presetParent===undefined ? null : presetParent;
+  const _pre = snapshotTasks();
   if(parent!==null){ const pt = tasks.find(x=>x.id===parent); if(pt) demoteToSummary(pt); }
   const t = { id:genNextId(), wbs:'', name:'新任務', parent, duration:1, preds:[], responsible:'', budget:0, actual:0, progress:0, milestone:false };
   tasks.push(t);
@@ -1635,7 +1736,7 @@ function quickAddTask(presetParent){
   selectedId = t.id;
   multiSelectIds = [];
   render();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
   // wait a frame for the new <tr> to actually exist in the DOM, then jump straight into renaming it
   requestAnimationFrame(()=>{
     const td = document.querySelector(`tr[data-id="${t.id}"] td.col-name`);
@@ -1977,20 +2078,23 @@ function findPredEntry(taskId, predId){
 function setRelType(taskId, predId, newType){
   const e = findPredEntry(taskId, predId);
   if(!e) return;
+  const _pre = snapshotTasks();
   e.type = newType;
-  render(); syncToSheet();
+  render(); pushUndoSnapshot(_pre);
 }
 function setRelLag(taskId, predId, newLagRaw){
   const e = findPredEntry(taskId, predId);
   if(!e) return;
+  const _pre = snapshotTasks();
   e.lag = Number(newLagRaw)||0;
-  render(); syncToSheet();
+  render(); pushUndoSnapshot(_pre);
 }
 function removeRel(taskId, predId){
   const t = tasks.find(x=>x.id===taskId);
   if(!t) return;
+  const _pre = snapshotTasks();
   t.preds = (t.preds||[]).filter(p=>p.id!==predId);
-  render(); syncToSheet();
+  render(); pushUndoSnapshot(_pre);
 }
 // v29: the × button asks for confirmation before removing — mirrors deleteTaskById's confirm()
 // pattern elsewhere in the app. removeRel() itself stays a pure, unconfirmed mutator so callers that
@@ -2010,8 +2114,9 @@ function addPredFromPanel(ownerId, predId){
   if(!t) return;
   t.preds = t.preds || [];
   if(t.preds.some(p=>p.id===predId)) return; // already linked — guard against a stale candidate list
+  const _pre = snapshotTasks();
   t.preds.push({id:predId, type:'FS', lag:0});
-  render(); syncToSheet();
+  render(); pushUndoSnapshot(_pre);
 }
 // Adds a successor relationship: makes `ownerId` one of `succId`'s predecessors (a successor
 // relationship is just the mirror image of a predecessor one — see relRowHtml's comment above).
@@ -2021,8 +2126,9 @@ function addSuccFromPanel(ownerId, succId){
   if(!t) return;
   t.preds = t.preds || [];
   if(t.preds.some(p=>p.id===ownerId)) return; // already linked
+  const _pre = snapshotTasks();
   t.preds.push({id:ownerId, type:'FS', lag:0});
-  render(); syncToSheet();
+  render(); pushUndoSnapshot(_pre);
 }
 
 /* ---------- v27: relationship task-picker modal ---------- */
@@ -2571,6 +2677,7 @@ function saveTask(){
   if(!name){ alert('請輸入任務名稱'); return; }
   const parentVal = f_parent.value;
   const parent = parentVal===''? null : parentVal;
+  const _pre = snapshotTasks();
 
   if(editingId!=null){
     const t = tasks.find(x=>x.id===editingId);
@@ -2614,7 +2721,7 @@ function saveTask(){
   }
   closeModal();
   render();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
 }
 function deleteCurrent(){
   if(editingId==null) return;
@@ -2631,6 +2738,7 @@ function deleteTaskById(id){
     ? '此任務底下還有子任務，刪除後子任務會一併刪除，確定要刪除嗎？'
     : '確定要刪除此任務嗎？其他以此任務為前置任務的項目也會一併移除相依關係。';
   if(!confirm(msg)) return false;
+  const _pre = snapshotTasks();
   const toDelete = new Set(); collectSubtree(id, toDelete);
   tasks = tasks.filter(t=>!toDelete.has(t.id));
   tasks.forEach(t=>{ if(t.preds) t.preds = t.preds.filter(p=>!toDelete.has(p.id)); });
@@ -2640,7 +2748,7 @@ function deleteTaskById(id){
   render();
   updateClipboardBar();
   updateChainBar();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
   return true;
 }
 // duplicates a task and its whole subtree, inserted as the next sibling right after the original.
@@ -2648,6 +2756,7 @@ function deleteTaskById(id){
 // tasks outside the duplicated subtree are left pointing at the originals.
 function duplicateTask(id){
   const root = tasks.find(x=>x.id===id); if(!root) return;
+  const _pre = snapshotTasks();
   const subtreeIds = new Set(); collectSubtree(id, subtreeIds);
   const originals = tasks.filter(t=>subtreeIds.has(t.id));
   const idMap = {};
@@ -2668,7 +2777,7 @@ function duplicateTask(id){
   tasks.splice(insertAt, 0, ...clones);
   if(rootClone) selectedId = rootClone.id;
   render();
-  syncToSheet();
+  pushUndoSnapshot(_pre);
 }
 
 /* ---------- right-click context menu ---------- */
