@@ -460,6 +460,7 @@
     </div>
     <div class="field">
       <label>表頭格式 Timescale Format</label>
+      <label class="checkline"><input type="radio" name="tsLines" value="1" onchange="tsSetLines(1)"> 一行 One Line</label>
       <label class="checkline"><input type="radio" name="tsLines" value="2" onchange="tsSetLines(2)"> 兩行 Two Lines</label>
       <label class="checkline"><input type="radio" name="tsLines" value="3" onchange="tsSetLines(3)"> 三行 Three Lines</label>
     </div>
@@ -557,17 +558,17 @@ let ganttZoomDragging = false;
 const GANTT_MIN_PX_PER_DAY = 1, GANTT_MAX_PX_PER_DAY = 120; // lowered from 3 so long projects can zoom out further
 const GANTT_ZOOM_PRESETS = { day: 40, week: 20, month: 7 };
 
-/* ---------- v32: Timescale (P6-style) — multi-tier Gantt header ----------
+/* ---------- v32/v33/v34: Timescale (P6-style) — multi-tier Gantt header ----------
    Right-click the Gantt header -> Timescale... opens a dialog modeled on P6's own Timescale window:
-   "Timescale Format" (Two/Three Lines) picks how many stacked header rows to show, coarsest on top;
-   "Date Interval" picks which named units (年/月/週/日) fill those rows. Unlike the old v31 control
-   (position + a manual range toggle on a single row), EVERY tier here renders through
-   ganttTierGrouping() (see renderGantt), which auto-merges adjacent periods into one wider label
-   whenever the current px/day would otherwise make that tier's text too cramped to read — so a label
-   is always shown, never hidden outright, satisfying "縮小時日期也不要不見". */
+   "Timescale Format" (One/Two/Three Lines) picks how many stacked header rows to show, top to bottom;
+   each row independently picks its own unit (年/月/週/日) and display mode — calendar date, or a
+   P6-style relative ordinal count (M1/M2, W1/W2...) from a configurable Start Date (see
+   ganttOrdinalLabel/ganttTimescaleAnchor). v34: zooming out shrinks every column by the same
+   proportion ("等值縮小") — cells are never merged into a combined range; a label that no longer fits
+   its column just shrinks its font, and is only omitted once even the smallest readable size wouldn't
+   fit (see ganttFitLabel in renderGantt). */
 const GANTT_UNIT_LABEL = { year:'年', month:'月', week:'週', day:'日' };
 const GANTT_UNIT_ORDINAL_PREFIX = { year:'Y', month:'M', week:'W', day:'D' };
-const GANTT_UNIT_BASE_DAYS = { year:365, month:30, week:7, day:1 }; // rough natural period length, for spacing math only — actual year/month boundaries are calendar-exact (see ganttPeriodStart/Next)
 // v33: each header tier is now a fully independent {unit, mode} row — unit is one of year/month/week/day,
 // mode is 'calendar' (actual date, e.g. "9/7") or 'ordinal' (project-relative count from the configured
 // start date, e.g. "M1"/"W3"). Replaces the v32 fixed coarse->fine preset list per the user's request to
@@ -599,7 +600,7 @@ function loadGanttHeaderPrefs(){
     const rows = Array.isArray(saved && saved.rows)
       ? saved.rows.filter(r=>r && validUnits.includes(r.unit) && validModes.includes(r.mode))
       : [];
-    if(rows.length===2 || rows.length===3) ganttTimescaleRows = rows;
+    if(rows.length>=1 && rows.length<=3) ganttTimescaleRows = rows;
     if(saved && saved.startDate){
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(saved.startDate);
       if(m) ganttTimescaleStartDate = new Date(+m[1], +m[2]-1, +m[3]);
@@ -625,14 +626,14 @@ function ganttPeriodStart(unit, d, anchor){
   }
   const s = new Date(d); s.setHours(0,0,0,0); return s;
 }
-// start of the period `groupFactor` natural periods after `periodStartDate` (groupFactor=1 for the
-// immediately-following period; >1 is used to merge several adjacent periods into one wider tick).
-function ganttPeriodAdvance(unit, periodStartDate, groupFactor){
+// start of the natural period immediately following `periodStartDate` (steps is always 1 as of v34 —
+// every natural period gets its own column now — but the function stays general-purpose).
+function ganttPeriodAdvance(unit, periodStartDate, steps){
   const n = new Date(periodStartDate);
-  if(unit==='year') n.setFullYear(n.getFullYear()+groupFactor);
-  else if(unit==='month') n.setMonth(n.getMonth()+groupFactor);
-  else if(unit==='week') n.setDate(n.getDate()+7*groupFactor);
-  else n.setDate(n.getDate()+groupFactor);
+  if(unit==='year') n.setFullYear(n.getFullYear()+steps);
+  else if(unit==='month') n.setMonth(n.getMonth()+steps);
+  else if(unit==='week') n.setDate(n.getDate()+7*steps);
+  else n.setDate(n.getDate()+steps);
   return n;
 }
 function ganttUnitLabel(unit, d){
@@ -657,6 +658,21 @@ function ganttOrdinalLabel(unit, periodStartDate, anchor){
     idx = Math.round((periodStartDate-anchorDayStart)/86400000) + 1;
   }
   return prefix+idx;
+}
+// v34: per-cell "shrink font, then omit" fit for a Timescale header label — replaces the old v32/v33
+// approach of merging several periods into one wider "start～end" cell. Every natural period keeps its
+// own column (so zooming out shrinks every column by the same proportion), and only the LABEL adapts:
+// it shrinks toward GANTT_MIN_FONT_PX as the column narrows, and is omitted only once it wouldn't fit
+// even at that floor size — the column/gridline/band itself is always drawn regardless.
+const GANTT_MIN_FONT_PX = 6;
+function ganttFitLabel(text, cellWidthPx, baseFontPx){
+  // rough width estimate for these short date/ordinal strings (digits, /, ～, a little CJK) — not real
+  // text metrics, just enough to decide when to shrink or give up.
+  const CHAR_W = 0.62;
+  if(text.length*baseFontPx*CHAR_W + 4 <= cellWidthPx) return { show:true, fontPx: baseFontPx };
+  const fitFontPx = (cellWidthPx-2) / (text.length*CHAR_W);
+  if(fitFontPx < GANTT_MIN_FONT_PX) return { show:false };
+  return { show:true, fontPx: Math.round(Math.min(fitFontPx, baseFontPx)*10)/10 };
 }
 let collapsed = {}; // summaryId -> bool
 let editingId = null;
@@ -2139,15 +2155,16 @@ function tsSetStartDate(v){
   if(!m) return; // ignore an incomplete/cleared native date input rather than staging an invalid anchor
   tsDraftStartDate = new Date(+m[1], +m[2]-1, +m[3]);
 }
+function ganttNextFinerUnit(unit){
+  return unit==='year' ? 'month' : (unit==='month' ? 'week' : (unit==='week' ? 'day' : 'day'));
+}
 function tsSetLines(n){
   tsDraftLines = n;
-  if(n===3 && tsDraftRows.length===2){
-    const last = tsDraftRows[tsDraftRows.length-1].unit;
-    const nextUnit = last==='week' ? 'day' : (last==='month' ? 'week' : 'day'); // one step finer than the current bottom row
-    tsDraftRows = [...tsDraftRows, {unit:nextUnit, mode:'calendar'}];
-  }else if(n===2 && tsDraftRows.length===3){
-    tsDraftRows = tsDraftRows.slice(0,2);
+  while(tsDraftRows.length < n){
+    // each newly-added row starts one step finer than the current bottom row (year->month->week->day)
+    tsDraftRows = [...tsDraftRows, {unit: ganttNextFinerUnit(tsDraftRows[tsDraftRows.length-1].unit), mode:'calendar'}];
   }
+  if(tsDraftRows.length > n) tsDraftRows = tsDraftRows.slice(0, n);
   renderTimescaleRowsUI();
 }
 function tsSetRowUnit(i, unit){
@@ -2161,7 +2178,7 @@ function renderTimescaleRowsUI(){
   const box = document.getElementById('tsRowsContainer');
   const units = ['year','month','week','day'];
   box.innerHTML = tsDraftRows.map((row, i) => {
-    const posLabel = i===0 ? '（最上／最粗）' : (i===tsDraftRows.length-1 ? '（最下／最細）' : '（中間）');
+    const posLabel = tsDraftRows.length===1 ? '' : (i===0 ? '（最上／最粗）' : (i===tsDraftRows.length-1 ? '（最下／最細）' : '（中間）'));
     return `<div class="ts-row">
       <span class="ts-row-label">第 ${i+1} 層${posLabel}</span>
       <select onchange="tsSetRowUnit(${i}, this.value)">
@@ -2205,44 +2222,41 @@ function renderGantt(){
 
   function xOfDate(d){ return Math.round((d-PROJECT_START)/86400000)*pxPerDay; }
 
-  /* ---------- v32/v33: multi-tier Timescale header ----------
+  /* ---------- v32/v33/v34: multi-tier Timescale header ----------
      Each row in timescaleRows gets its own stacked header row (top -> bottom, same order as the
-     Timescale dialog). A tier's natural period (a calendar month, a week, a day...) auto-merges with
-     enough of its neighbors into one wider label whenever the current px/day would otherwise make it
-     too narrow to read (GANTT_MIN_LABEL_PX) — so a tier's row always shows SOME text; it just covers a
-     wider span when zoomed way out, instead of ever going blank. Only the TOP tier gets the alternating
+     Timescale dialog: 1, 2 or 3 tiers). Each tier's unit and calendar/ordinal (M1/W1) display mode are
+     independently configurable — see ganttOrdinalLabel(). Only the TOP tier gets the alternating
      background bands (extending down through the task rows, same as the old fixed month-band look);
      only the BOTTOM tier gets full-height gridlines through the task rows — a middle tier (3-line mode
-     only) gets a light separator confined to its own row. Each tier's unit and calendar/ordinal (M1/W1)
-     display mode are independently configurable — see ganttOrdinalLabel(). */
-  const GANTT_MIN_LABEL_PX = 34;
+     only) gets a light separator confined to its own row.
+     v34: per user request, cells are never merged into a combined "start～end" range anymore — every
+     natural period (a calendar month, a week, a day...) always gets its own column, so zooming out
+     shrinks every column by the same proportion ("等值縮小") instead of suddenly jumping to a wider
+     merged cell. When a column becomes too narrow for its label at the normal font size, the label's
+     font-size shrinks to fit (see ganttFitLabel); only once even the smallest readable size still
+     wouldn't fit is the label omitted for that one cell — the gridlines/bands themselves never disappear. */
   let bands='', monthLabels='', gridLines='';
   timescaleRows.forEach((row, tierIdx)=>{
     const { unit, mode } = row;
     const isCoarsest = tierIdx===0;
     const isFinest = tierIdx===timescaleRows.length-1;
     const rowY = tierIdx*TIER_ROW_H;
-    const estPeriodPx = pxPerDay*GANTT_UNIT_BASE_DAYS[unit];
-    const groupFactor = estPeriodPx>=GANTT_MIN_LABEL_PX ? 1 : Math.max(1, Math.ceil(GANTT_MIN_LABEL_PX/estPeriodPx));
+    const baseFontPx = isCoarsest ? 11 : 10.5;
     let cursor = ganttPeriodStart(unit, PROJECT_START, timescaleAnchor);
     let idx = 0;
     while(xOfDate(cursor) < width){
-      const next = ganttPeriodAdvance(unit, cursor, groupFactor);
+      const next = ganttPeriodAdvance(unit, cursor, 1);
       const x0 = Math.max(0, xOfDate(cursor));
       const x1 = xOfDate(next);
       if(isCoarsest){
         bands += `<rect class="month-band ${idx%2? 'alt':''}" x="${x0}" y="${headerH}" width="${x1-x0}" height="${bodyH}"></rect>`;
       }
-      let label;
-      if(groupFactor>1){
-        const periodEnd = new Date(next); periodEnd.setDate(periodEnd.getDate()-1);
-        label = mode==='ordinal'
-          ? `${ganttOrdinalLabel(unit,cursor,timescaleAnchor)}～${ganttOrdinalLabel(unit,periodEnd,timescaleAnchor)}`
-          : (unit==='year' ? `${ganttUnitLabel(unit,cursor)}～${ganttUnitLabel(unit,periodEnd)}` : `${fmtShort(cursor)}～${fmtShort(periodEnd)}`);
-      }else{
-        label = mode==='ordinal' ? ganttOrdinalLabel(unit,cursor,timescaleAnchor) : ganttUnitLabel(unit,cursor);
+      const label = mode==='ordinal' ? ganttOrdinalLabel(unit,cursor,timescaleAnchor) : ganttUnitLabel(unit,cursor);
+      const fit = ganttFitLabel(label, x1-x0, baseFontPx);
+      if(fit.show){
+        const fontAttr = fit.fontPx!==baseFontPx ? ` style="font-size:${fit.fontPx}px"` : '';
+        monthLabels += `<text class="${isCoarsest?'month-text':'axis-text'}"${fontAttr} x="${x0+(isCoarsest?6:3)}" y="${rowY+TIER_ROW_H-8}">${label}</text>`;
       }
-      monthLabels += `<text class="${isCoarsest?'month-text':'axis-text'}" x="${x0+(isCoarsest?6:3)}" y="${rowY+TIER_ROW_H-8}">${label}</text>`;
       if(isFinest){
         gridLines += `<line class="grid-line" x1="${x0}" y1="${headerH}" x2="${x0}" y2="${headerH+bodyH}"></line>`;
       } else if(!isCoarsest){
