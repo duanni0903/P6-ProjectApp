@@ -348,7 +348,7 @@
   </div>
 
   <footer class="note">
-    範例資料僅供展示排程邏輯（關鍵路徑 CPM 演算法會自動依前置任務與工期重新計算）。工作日以週一至週五計算，不含例假日。點選「＋ 新增任務」可加入任務並即時重算時程與預算彙總。
+    範例資料僅供展示排程邏輯（關鍵路徑 CPM 演算法會自動依前置任務與工期重新計算）。工期以日曆天計算，每天都算、含週末例假日。點選「＋ 新增任務」可加入任務並即時重算時程與預算彙總。
   </footer>
 
   <div class="rel-panel" id="relPanel"></div>
@@ -377,7 +377,7 @@
           <datalist id="respList"></datalist>
         </div>
         <div class="field">
-          <label>工期（工作天）</label>
+          <label id="f_durLabel">工期（日曆天）</label>
           <input type="number" id="f_dur" min="1" value="5">
         </div>
       </div>
@@ -995,14 +995,18 @@ function loadColumnLayout(){
 loadColumnLayout(); // apply before the first render() so there's no flash of the default layout
 
 /* ---------- date / workday helpers ---------- */
-function isWeekend(d){ const g=d.getDay(); return g===0||g===6; }
-function buildWorkdayList(startDate, count){
+// v38 briefly added a whole-project 工作天／日曆天 toggle (workday vs calendar-day scheduling), but the
+// user asked to simplify it back to a single fixed behavior to avoid the backend ambiguity it created —
+// the Google Sheet's Early/Late Start/Finish columns would silently reflect whichever mode was active in
+// the browser at the moment of the last sync, with nothing in the sheet itself recording which mode that
+// was. So this app now always schedules in calendar days (every day counts, weekends included) — no
+// toggle, no localStorage mode setting. `duration` is simply "N calendar days from ES".
+function buildCalendarDayList(startDate, count){
   const list=[]; let d=new Date(startDate);
-  if(isWeekend(d)){ while(isWeekend(d)) d.setDate(d.getDate()+1); }
-  while(list.length<count){ if(!isWeekend(d)) list.push(new Date(d)); d.setDate(d.getDate()+1); }
+  for(let i=0;i<count;i++){ list.push(new Date(d)); d.setDate(d.getDate()+1); }
   return list;
 }
-const WORKDAYS = buildWorkdayList(PROJECT_START, 600);
+const PROJECT_DAY_LIST = buildCalendarDayList(PROJECT_START, 600);
 // dates can be displayed in either the ROC (Republic of China / Minguo) calendar or the
 // Gregorian (western/西元) calendar, toggled via the "民國 / 西元" buttons — setEra() below.
 // ROC year = Gregorian year - 1911 (e.g. 2026 -> 民國115年)
@@ -1303,13 +1307,14 @@ function computeSchedule(){
     t.LS = t.LF - t.duration;
     t.float = t.LS - t.ES;
     t.critical = t.float <= 0;
-    t.startDate = WORKDAYS[t.ES];
-    t.endDate = WORKDAYS[Math.max(t.ES, t.EF-1)];
-    // late-start/late-finish as actual calendar dates (LS/LF above are workday-index numbers used
+    // ES/EF/LS/LF are integer offsets from PROJECT_START, in calendar days — see PROJECT_DAY_LIST above.
+    t.startDate = PROJECT_DAY_LIST[t.ES];
+    t.endDate = PROJECT_DAY_LIST[Math.max(t.ES, t.EF-1)];
+    // late-start/late-finish as actual calendar dates (LS/LF above are day-list-index numbers used
     // for the float math) — kept mainly so the Google Sheet sync (v19) can show P6-style Early/Late
     // Start/Finish date columns; not used anywhere else in the UI
-    t.lateStartDate = WORKDAYS[Math.max(0, t.LS)];
-    t.lateFinishDate = WORKDAYS[Math.max(t.LS, t.LF-1, 0)];
+    t.lateStartDate = PROJECT_DAY_LIST[Math.max(0, t.LS)];
+    t.lateFinishDate = PROJECT_DAY_LIST[Math.max(t.LS, t.LF-1, 0)];
   });
 
   // summary rollups (bottom-up, arbitrary depth: a summary's children may themselves be summaries)
@@ -1353,7 +1358,7 @@ function renderStats(){
   const s = getStats();
   const variance = s.totalBudget - s.totalActual;
   document.getElementById('metaLine').textContent =
-    `專案期間 ${fmtDate(PROJECT_START)} — ${fmtDate(s.endDate)} ・ 共 ${s.totalWD} 個工作天`;
+    `專案期間 ${fmtDate(PROJECT_START)} — ${fmtDate(s.endDate)} ・ 共 ${s.totalWD} 個日曆天`;
 
   const cards = [
     {lbl:'總預算', val:'NT$ '+money(s.totalBudget)},
