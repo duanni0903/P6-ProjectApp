@@ -659,11 +659,13 @@ function ganttOrdinalLabel(unit, periodStartDate, anchor){
   }
   return prefix+idx;
 }
-// v34: per-cell "shrink font, then omit" fit for a Timescale header label — replaces the old v32/v33
+// v34: "shrink font, then omit" fit for a Timescale header row's label — replaces the old v32/v33
 // approach of merging several periods into one wider "start～end" cell. Every natural period keeps its
 // own column (so zooming out shrinks every column by the same proportion), and only the LABEL adapts:
 // it shrinks toward GANTT_MIN_FONT_PX as the column narrows, and is omitted only once it wouldn't fit
-// even at that floor size — the column/gridline/band itself is always drawn regardless.
+// even at that floor size — the column/gridline/band itself is always drawn regardless. Called ONCE per
+// row (against that row's longest label and narrowest column, see renderGantt) rather than per cell, so
+// same-width cells in one row never end up at visibly different font sizes.
 const GANTT_MIN_FONT_PX = 6;
 function ganttFitLabel(text, cellWidthPx, baseFontPx){
   // rough width estimate for these short date/ordinal strings (digits, /, ～, a little CJK) — not real
@@ -2232,9 +2234,12 @@ function renderGantt(){
      v34: per user request, cells are never merged into a combined "start～end" range anymore — every
      natural period (a calendar month, a week, a day...) always gets its own column, so zooming out
      shrinks every column by the same proportion ("等值縮小") instead of suddenly jumping to a wider
-     merged cell. When a column becomes too narrow for its label at the normal font size, the label's
-     font-size shrinks to fit (see ganttFitLabel); only once even the smallest readable size still
-     wouldn't fit is the label omitted for that one cell — the gridlines/bands themselves never disappear. */
+     merged cell. When a column becomes too narrow for its label at the normal font size, the whole
+     row's font-size shrinks to fit instead (see ganttFitLabel) — sized ONCE per row from that row's
+     longest label and narrowest column, not per cell, so e.g. "D9" and "D10" never end up at two
+     different sizes next to each other ("一大一小"); only once even the smallest readable size still
+     wouldn't fit the longest label is that row's labels omitted — the gridlines/bands themselves
+     never disappear. */
   let bands='', monthLabels='', gridLines='';
   timescaleRows.forEach((row, tierIdx)=>{
     const { unit, mode } = row;
@@ -2242,19 +2247,31 @@ function renderGantt(){
     const isFinest = tierIdx===timescaleRows.length-1;
     const rowY = tierIdx*TIER_ROW_H;
     const baseFontPx = isCoarsest ? 11 : 10.5;
+
+    // pass 1: collect every period in this row first, so the row can be sized ONCE (from its longest
+    // label vs. its narrowest column) rather than cell-by-cell.
+    const periods = [];
     let cursor = ganttPeriodStart(unit, PROJECT_START, timescaleAnchor);
-    let idx = 0;
     while(xOfDate(cursor) < width){
       const next = ganttPeriodAdvance(unit, cursor, 1);
       const x0 = Math.max(0, xOfDate(cursor));
       const x1 = xOfDate(next);
+      const label = mode==='ordinal' ? ganttOrdinalLabel(unit,cursor,timescaleAnchor) : ganttUnitLabel(unit,cursor);
+      periods.push({ x0, x1, label });
+      cursor = next;
+    }
+    const minCellW = periods.reduce((m,p)=>Math.min(m, p.x1-p.x0), Infinity);
+    const longestLabel = periods.reduce((a,p)=>p.label.length>a.length ? p.label : a, '');
+    const rowFit = periods.length ? ganttFitLabel(longestLabel, minCellW, baseFontPx) : { show:false };
+    const fontAttr = (rowFit.show && rowFit.fontPx!==baseFontPx) ? ` style="font-size:${rowFit.fontPx}px"` : '';
+
+    // pass 2: render, reusing the one font decision for every cell in this row.
+    periods.forEach((p, idx)=>{
+      const { x0, x1, label } = p;
       if(isCoarsest){
         bands += `<rect class="month-band ${idx%2? 'alt':''}" x="${x0}" y="${headerH}" width="${x1-x0}" height="${bodyH}"></rect>`;
       }
-      const label = mode==='ordinal' ? ganttOrdinalLabel(unit,cursor,timescaleAnchor) : ganttUnitLabel(unit,cursor);
-      const fit = ganttFitLabel(label, x1-x0, baseFontPx);
-      if(fit.show){
-        const fontAttr = fit.fontPx!==baseFontPx ? ` style="font-size:${fit.fontPx}px"` : '';
+      if(rowFit.show){
         monthLabels += `<text class="${isCoarsest?'month-text':'axis-text'}"${fontAttr} x="${x0+(isCoarsest?6:3)}" y="${rowY+TIER_ROW_H-8}">${label}</text>`;
       }
       if(isFinest){
@@ -2262,8 +2279,7 @@ function renderGantt(){
       } else if(!isCoarsest){
         gridLines += `<line class="grid-line" x1="${x0}" y1="${rowY}" x2="${x0}" y2="${rowY+TIER_ROW_H}"></line>`;
       }
-      cursor = next; idx++;
-    }
+    });
   });
   // horizontal row separators
   let hlines='';
