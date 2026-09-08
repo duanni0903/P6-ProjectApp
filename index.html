@@ -637,9 +637,12 @@ function ganttPeriodAdvance(unit, periodStartDate, steps){
   return n;
 }
 function ganttUnitLabel(unit, d){
+  // v36: per user request, each tier shows only its own unit's number — not a compound date. Month tier
+  // no longer repeats the year (e.g. "9月" not "115/9"; the year is already shown in the tier above when
+  // present), and day tier shows just the day-of-month digit (e.g. "7" not "9/7").
   if(unit==='year') return `${eraYear(d.getFullYear())}年`;
-  if(unit==='month') return fmtYM(d);
-  return fmtShort(d);
+  if(unit==='month') return `${d.getMonth()+1}月`;
+  return `${d.getDate()}`;
 }
 // P6-style relative numbering: "M1"/"M2" for month, "W1"/"W2" for week, etc. — counted from the
 // period (of the SAME unit) that contains `anchor`, so index 1 is always the anchor's own period.
