@@ -180,12 +180,27 @@
   .ts-row-label{width:118px; flex:0 0 118px; font-size:12px; color:var(--text-dim);}
   .ts-row select{flex:1; padding:6px 8px; border:1px solid var(--border-dark); border-radius:7px; font-size:12.5px; font-family:inherit; color:var(--text);}
 
-  .modal-gantt-color{width:420px;}
+  .modal-gantt-color{width:480px;}
   .gc-row{display:flex; align-items:center; gap:10px; margin-bottom:9px;}
   .gc-row:last-child{margin-bottom:0;}
-  .gc-row-label{width:150px; flex:0 0 150px; font-size:12.5px; color:var(--text);}
-  .gc-row input[type=color]{width:36px; height:28px; padding:0; border:1px solid var(--border-dark); border-radius:6px; cursor:pointer; background:none;}
-  .gc-row-hex{font-size:11.5px; color:var(--text-faint); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; width:64px;}
+  .gc-row-label{width:78px; flex:0 0 78px; font-size:12.5px; color:var(--text);}
+  .gc-swatch-btn{width:34px; height:24px; flex:0 0 34px; padding:0; border:1px solid var(--border-dark); border-radius:6px; cursor:pointer;}
+  .gc-row-hex{font-size:11.5px; color:var(--text-faint); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; width:60px; flex:0 0 60px;}
+  .gc-pattern-group{display:flex; gap:5px; margin-left:auto;}
+  .gc-pattern-btn{padding:3px; border:1px solid var(--border-dark); border-radius:6px; background:#fff; cursor:pointer; line-height:0;}
+  .gc-pattern-btn.active{border-color:var(--primary); box-shadow:0 0 0 2px rgba(59,130,246,.25);}
+  .gc-pattern-swatch{display:block; width:18px; height:14px; border-radius:3px;}
+  /* v41: draggable HSV picker popover — see #gcPickerPopover in the HTML and gcRenderPicker() */
+  .gc-picker-popover{position:fixed; z-index:60; background:#fff; border:1px solid var(--border-dark); border-radius:10px; padding:12px; box-shadow:0 12px 30px rgba(0,0,0,.22); display:none; width:156px;}
+  .gc-picker-popover.open{display:block;}
+  .gc-sv-square{position:relative; width:156px; height:110px; border-radius:6px; margin-bottom:10px; cursor:crosshair;}
+  .gc-sv-dot{position:absolute; width:12px; height:12px; margin:-6px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.45); pointer-events:none;}
+  .gc-hue-slider{position:relative; width:156px; height:12px; border-radius:6px; margin-bottom:10px; cursor:pointer; background:linear-gradient(to right, red, yellow, lime, cyan, blue, magenta, red);}
+  .gc-hue-dot{position:absolute; top:-2px; width:14px; height:16px; margin-left:-7px; border-radius:4px; border:2px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.45); background:transparent; pointer-events:none;}
+  .gc-picker-row{display:flex; align-items:center; gap:6px;}
+  .gc-picker-preview{width:22px; height:22px; flex:0 0 22px; border-radius:5px; border:1px solid var(--border-dark);}
+  .gc-picker-row input{flex:1; min-width:0; padding:5px 6px; border:1px solid var(--border-dark); border-radius:6px; font-size:12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .btn-sm{padding:5px 9px; font-size:11.5px;}
 
   footer.note{margin-top:16px; font-size:11.5px; color:var(--text-faint); line-height:1.6;}
 
@@ -506,12 +521,29 @@
   <div class="modal modal-gantt-color">
     <h2>甘特圖顏色設定</h2>
     <div class="field" id="gcRowsContainer"></div>
-    <div class="hint">會同步套用到下方圖例、甘特圖圖表，以及任務表「進度」欄的進度條顏色。</div>
+    <div class="hint">點色塊可拖曳挑選顏色（即時預覽，放開後圈圈停在原位，按「確認」關閉選色盤）；右側三個按鈕可選擇實心／空心／斜線樣式。會同步套用到下方圖例、甘特圖圖表，以及任務表「進度」欄。</div>
     <div class="modal-actions">
       <button class="btn" onclick="resetGanttColorDialog()" style="margin-right:auto">還原預設</button>
       <button class="btn" onclick="closeGanttColorDialog()">取消 Cancel</button>
       <button class="btn primary" onclick="applyGanttColorDialog()">確定 OK</button>
     </div>
+  </div>
+</div>
+
+<!-- v41: custom draggable HSV color picker popover, shared by every row's swatch button in the dialog
+     above. See gcOpenPicker()/gcSvStart()/gcHueStart()/gcConfirmPicker(). Kept as a sibling of the
+     dialog (not inside #gcRowsContainer) so re-rendering the rows while dragging never touches it. -->
+<div class="gc-picker-popover" id="gcPickerPopover" onclick="event.stopPropagation()">
+  <div class="gc-sv-square" id="gcSvSquare" onmousedown="gcSvStart(event)">
+    <div class="gc-sv-dot" id="gcSvDot"></div>
+  </div>
+  <div class="gc-hue-slider" id="gcHueSlider" onmousedown="gcHueStart(event)">
+    <div class="gc-hue-dot" id="gcHueDot"></div>
+  </div>
+  <div class="gc-picker-row">
+    <span class="gc-picker-preview" id="gcPickerPreview"></span>
+    <input type="text" id="gcHexInput" maxlength="7" spellcheck="false" oninput="gcHexInputChanged(this.value)">
+    <button type="button" class="btn primary btn-sm" onclick="gcConfirmPicker()">確認</button>
   </div>
 </div>
 
@@ -650,59 +682,100 @@ function loadGanttHeaderPrefs(){
 }
 loadGanttHeaderPrefs(); // apply before the first render() so there's no flash of the default layout
 
-/* ---------- v40: customizable Gantt/legend colors ----------
+/* ---------- v41: customizable Gantt/legend colors + fill patterns ----------
    Right-click anywhere in the Gantt chart body (see showGanttBarsMenu(), wired to #ganttWrap's
-   oncontextmenu in the HTML) or click the legend's own "🎨 自訂顏色…" button opens a small dialog
-   (same OK/Cancel-commits-a-draft pattern as the Timescale dialog above) to recolor the six semantic
+   oncontextmenu in the HTML) or click the legend's own "🎨 自訂顏色…" button opens a dialog (same
+   OK/Cancel-commits-a-draft pattern as the Timescale dialog above) to restyle the six semantic
    colors used across the app: the three task-status bar colors, the critical-path outline, the
-   milestone diamond, and the summary/彙總 bar. Applying re-renders the Gantt AND the legend swatches
-   AND the WBS table's 進度 column progress bar — all four read from this one `ganttColors` object, so
-   there's never a chance for the legend to drift out of sync with what the chart actually shows. */
-const GANTT_COLOR_DEFAULTS = Object.freeze({
-  notStarted: '#94a3b8', inProgress: '#3b82f6', completed: '#16a34a',
-  critical: '#dc2626', milestone: '#d97706', summary: '#334155',
+   milestone diamond, and the summary/彙總 bar. Each (except 關鍵路徑, which is always drawn as a thin
+   outline overlaid on another bar, never its own fill — see GANTT_PATTERN_KEYS) also gets a fill
+   PATTERN: 實心 solid, 空心 hollow (outline only), or 斜線 diagonal stripes. Applying re-renders the
+   Gantt, the legend swatches, AND the WBS table's 進度 column progress bar — all three read from this
+   one `ganttStyles` object, so there's never a chance for the legend to drift out of sync with what
+   the chart actually shows. Colors are picked with a custom draggable HSV picker (see the "v41 color
+   picker" section further down) rather than the native <input type=color>, per the user's request to
+   see the color update live while dragging and only commit when they click 確認. */
+const GANTT_STYLE_DEFAULTS = Object.freeze({
+  notStarted: Object.freeze({ color:'#94a3b8', pattern:'solid' }),
+  inProgress: Object.freeze({ color:'#3b82f6', pattern:'solid' }),
+  completed:  Object.freeze({ color:'#16a34a', pattern:'solid' }),
+  critical:   Object.freeze({ color:'#dc2626', pattern:'solid' }), // pattern unused — critical is always an outline overlay
+  milestone:  Object.freeze({ color:'#d97706', pattern:'solid' }),
+  summary:    Object.freeze({ color:'#334155', pattern:'solid' }),
 });
 const GANTT_COLOR_LABELS = {
   notStarted: '未開始', inProgress: '進行中', completed: '已完成',
   critical: '關鍵路徑', milestone: '里程碑', summary: '階段彙總',
 };
-let ganttColors = { ...GANTT_COLOR_DEFAULTS };
-const GANTT_COLOR_STORAGE_KEY = 'p6lite_gantt_colors_v1';
-function saveGanttColorPrefs(){
-  try{ localStorage.setItem(GANTT_COLOR_STORAGE_KEY, JSON.stringify(ganttColors)); }
-  catch(err){ console.warn('無法儲存甘特圖顏色設定', err); }
+// categories that actually render as a fill (so a pattern choice is visible) — 關鍵路徑 is excluded
+// since it's always a stroke-only outline drawn on top of another bar's own fill
+const GANTT_PATTERN_KEYS = ['notStarted','inProgress','completed','milestone','summary'];
+const GANTT_PATTERN_LABELS = { solid:'實心', hollow:'空心', stripes:'斜線' };
+function cloneGanttStyles(src){
+  const out = {};
+  Object.keys(GANTT_STYLE_DEFAULTS).forEach(k => out[k] = { ...src[k] });
+  return out;
 }
-function loadGanttColorPrefs(){
+let ganttStyles = cloneGanttStyles(GANTT_STYLE_DEFAULTS);
+const GANTT_STYLE_STORAGE_KEY = 'p6lite_gantt_styles_v1';
+const GANTT_COLOR_STORAGE_KEY_LEGACY = 'p6lite_gantt_colors_v1'; // v40's color-only format — migrated below, never written to again
+function saveGanttStylePrefs(){
+  try{ localStorage.setItem(GANTT_STYLE_STORAGE_KEY, JSON.stringify(ganttStyles)); }
+  catch(err){ console.warn('無法儲存甘特圖樣式設定', err); }
+}
+function loadGanttStylePrefs(){
+  const hex = /^#[0-9a-fA-F]{6}$/;
+  const validPatterns = ['solid','hollow','stripes'];
   try{
-    const raw = localStorage.getItem(GANTT_COLOR_STORAGE_KEY);
-    if(!raw) return;
-    const saved = JSON.parse(raw);
-    const hex = /^#[0-9a-fA-F]{6}$/;
-    Object.keys(GANTT_COLOR_DEFAULTS).forEach(k=>{
-      if(saved && typeof saved[k]==='string' && hex.test(saved[k])) ganttColors[k] = saved[k];
-    });
+    const raw = localStorage.getItem(GANTT_STYLE_STORAGE_KEY);
+    if(raw){
+      const saved = JSON.parse(raw);
+      Object.keys(GANTT_STYLE_DEFAULTS).forEach(k=>{
+        const s = saved && saved[k];
+        if(s && typeof s.color==='string' && hex.test(s.color)) ganttStyles[k].color = s.color;
+        if(s && validPatterns.includes(s.pattern)) ganttStyles[k].pattern = s.pattern;
+      });
+      return;
+    }
+    // one-time migration from the v40 color-only key, if that's all that's there
+    const legacyRaw = localStorage.getItem(GANTT_COLOR_STORAGE_KEY_LEGACY);
+    if(legacyRaw){
+      const legacy = JSON.parse(legacyRaw);
+      Object.keys(GANTT_STYLE_DEFAULTS).forEach(k=>{
+        if(legacy && typeof legacy[k]==='string' && hex.test(legacy[k])) ganttStyles[k].color = legacy[k];
+      });
+    }
   }catch(err){
-    console.warn('無法讀取甘特圖顏色設定，使用預設值', err);
+    console.warn('無法讀取甘特圖樣式設定，使用預設值', err);
   }
 }
-loadGanttColorPrefs(); // apply before the first render() so there's no flash of the default colors
-// pushes the current ganttColors into the two plain-CSS spots (summary bar fill, critical-path arrow
-// stroke — both custom properties) and the legend swatches; renderGantt()/progColor() read
-// ganttColors directly on their next call, so this alone is enough to prime everything before the
-// first real render() (triggered later by loadFromSheet()) runs. syncLegendColors() is also called
-// from inside render() itself (see below) so the legend can never drift out of sync with the chart.
+loadGanttStylePrefs(); // apply before the first render() so there's no flash of the default styles
+// a CSS `background` value implementing the same three patterns for plain HTML elements (legend
+// swatches, the WBS table's progress-bar segment) — the SVG side needs actual <pattern> defs instead
+// (see ganttSvgPatternDefs()/ganttSvgFill() near renderGantt()), since SVG shapes can't read CSS bg
+function cssPatternBackground(color, pattern){
+  if(pattern==='hollow') return 'transparent';
+  if(pattern==='stripes') return `repeating-linear-gradient(45deg, ${color} 0 4px, #fff 4px 8px)`;
+  return color;
+}
+// pushes the current ganttStyles into the plain-CSS spots (summary bar / critical-path stroke via
+// custom properties — used by non-fill-pattern elements like the dependency arrows) and the legend
+// swatches; renderGantt()/progColor() read ganttStyles directly on their next call, so this alone is
+// enough to prime everything before the first real render() (triggered later by loadFromSheet())
+// runs. syncLegendColors() is also called from inside render() itself (see below) so the legend can
+// never drift out of sync with the chart.
 function setGanttColorCssVars(){
-  document.documentElement.style.setProperty('--summary-bar', ganttColors.summary);
-  document.documentElement.style.setProperty('--gantt-critical', ganttColors.critical);
+  document.documentElement.style.setProperty('--summary-bar', ganttStyles.summary.color);
+  document.documentElement.style.setProperty('--gantt-critical', ganttStyles.critical.color);
 }
 function syncLegendColors(){
-  const set = (id, prop, val) => { const el = document.getElementById(id); if(el) el.style[prop] = val; };
-  set('legendNotStarted', 'background', ganttColors.notStarted);
-  set('legendInProgress', 'background', ganttColors.inProgress);
-  set('legendCompleted', 'background', ganttColors.completed);
-  set('legendCritical', 'borderColor', ganttColors.critical);
-  set('legendMilestone', 'background', ganttColors.milestone);
-  set('legendSummary', 'background', ganttColors.summary);
+  const setBg = (id, key) => { const el = document.getElementById(id); if(el) el.style.background = cssPatternBackground(ganttStyles[key].color, ganttStyles[key].pattern); };
+  setBg('legendNotStarted', 'notStarted');
+  setBg('legendInProgress', 'inProgress');
+  setBg('legendCompleted', 'completed');
+  const critEl = document.getElementById('legendCritical'); if(critEl) critEl.style.borderColor = ganttStyles.critical.color;
+  setBg('legendMilestone', 'milestone');
+  setBg('legendSummary', 'summary');
 }
 setGanttColorCssVars();
 syncLegendColors();
@@ -1624,7 +1697,8 @@ function visibleRows(){
 }
 
 /* ---------- WBS table ---------- */
-function progColor(p){ return p>=100 ? ganttColors.completed : (p>0 ? ganttColors.inProgress : ganttColors.notStarted); }
+function progStyleKey(p){ return p>=100 ? 'completed' : (p>0 ? 'inProgress' : 'notStarted'); }
+function progColor(p){ const k = progStyleKey(p); return cssPatternBackground(ganttStyles[k].color, ganttStyles[k].pattern); }
 function predText(t){
   if(!t.preds || !t.preds.length) return '無';
   return t.preds.map(p=>{
@@ -1682,7 +1756,11 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
       const f = t.float||0;
       return `<td${f<=0?' style="color:var(--danger); font-weight:700;"':''}>${f}</td>`;
     }
-    case 'progress': return `<td class="col-progress"><div class="prog-bar-wrap"><div class="prog-bar"><div style="width:${t.progress}%; background:${progColor(t.progress)}"></div></div><span>${t.progress}%</span></div></td>`;
+    case 'progress': {
+      const psk = progStyleKey(t.progress);
+      const hollowBorder = ganttStyles[psk].pattern==='hollow' ? `box-sizing:border-box; border:1.5px solid ${ganttStyles[psk].color};` : '';
+      return `<td class="col-progress"><div class="prog-bar-wrap"><div class="prog-bar"><div style="width:${t.progress}%; background:${progColor(t.progress)}; ${hollowBorder}"></div></div><span>${t.progress}%</span></div></td>`;
+    }
     case 'budget': return `<td class="col-money">${money(t.budget)}</td>`;
     case 'actual': return `<td class="col-money">${money(t.actual)}</td>`;
     case 'diff': return `<td class="col-money ${diff<0?'diff-neg':'diff-pos'}">${diff<0?'':'+'}${money(diff)}</td>`;
@@ -2486,44 +2564,210 @@ document.addEventListener('contextmenu', function(e){ if(!e.target.closest('#gan
 document.addEventListener('scroll', hideGanttBarsMenu, true);
 window.addEventListener('resize', hideGanttBarsMenu);
 
-// color dialog: edits are staged in gcDraft and only committed to ganttColors on OK, same
-// draft/commit pattern as the Timescale dialog above (tsDraft*) rather than applying every drag live.
-let gcDraft = { ...GANTT_COLOR_DEFAULTS };
+// color dialog: edits are staged in gcDraft ({key: {color,pattern}}) and only committed to
+// ganttStyles on OK, same draft/commit pattern as the Timescale dialog above (tsDraft*).
+let gcDraft = cloneGanttStyles(GANTT_STYLE_DEFAULTS);
 function openGanttColorDialog(){
   hideGanttBarsMenu();
-  gcDraft = { ...ganttColors };
+  gcDraft = cloneGanttStyles(ganttStyles);
+  gcClosePicker();
   renderGanttColorRowsUI();
   document.getElementById('ganttColorOverlay').classList.add('open');
 }
 function gcSetColor(key, value){
-  gcDraft[key] = value;
-  renderGanttColorRowsUI(); // keep the hex text next to each swatch in sync as the user picks
+  gcDraft[key].color = value;
+  renderGanttColorRowsUI(); // keep the hex text next to each swatch in sync
+}
+function gcSetPattern(key, pattern){
+  gcDraft[key].pattern = pattern;
+  renderGanttColorRowsUI();
+}
+function gcPatternIcon(key, pattern){
+  const color = gcDraft[key].color;
+  const bg = cssPatternBackground(color, pattern);
+  const border = pattern==='hollow' ? `border:1.5px solid ${color};` : 'border:1px solid transparent;';
+  return `<span class="gc-pattern-swatch" style="background:${bg}; ${border}"></span>`;
 }
 function renderGanttColorRowsUI(){
   const box = document.getElementById('gcRowsContainer');
-  box.innerHTML = Object.keys(GANTT_COLOR_DEFAULTS).map(key => `
+  box.innerHTML = Object.keys(GANTT_STYLE_DEFAULTS).map(key => {
+    const st = gcDraft[key];
+    const swatchBorder = st.pattern==='hollow' ? `border-color:${st.color};` : '';
+    const patternUI = GANTT_PATTERN_KEYS.includes(key) ? `
+      <div class="gc-pattern-group">
+        ${['solid','hollow','stripes'].map(p => `<button type="button" class="gc-pattern-btn${st.pattern===p?' active':''}" onclick="gcSetPattern('${key}','${p}')" title="${GANTT_PATTERN_LABELS[p]}">${gcPatternIcon(key,p)}</button>`).join('')}
+      </div>` : '';
+    return `
     <div class="gc-row">
       <span class="gc-row-label">${GANTT_COLOR_LABELS[key]}</span>
-      <input type="color" value="${gcDraft[key]}" oninput="gcSetColor('${key}', this.value)">
-      <span class="gc-row-hex">${gcDraft[key]}</span>
-    </div>`).join('');
+      <button type="button" class="gc-swatch-btn" style="background:${cssPatternBackground(st.color, st.pattern)}; ${swatchBorder}" onclick="gcOpenPicker('${key}', event)" title="點擊挑選顏色"></button>
+      <span class="gc-row-hex">${st.color}</span>
+      ${patternUI}
+    </div>`;
+  }).join('');
 }
 function resetGanttColorDialog(){
-  gcDraft = { ...GANTT_COLOR_DEFAULTS };
+  gcDraft = cloneGanttStyles(GANTT_STYLE_DEFAULTS);
+  gcClosePicker();
   renderGanttColorRowsUI();
 }
 function closeGanttColorDialog(){
+  gcClosePicker();
   document.getElementById('ganttColorOverlay').classList.remove('open');
 }
 function applyGanttColorDialog(){
-  ganttColors = { ...gcDraft };
-  saveGanttColorPrefs();
+  ganttStyles = cloneGanttStyles(gcDraft);
+  saveGanttStylePrefs();
   setGanttColorCssVars();
   syncLegendColors();
   renderTable();
   renderGantt();
   closeGanttColorDialog();
 }
+
+/* ---------- v41: custom draggable HSV color picker ----------
+   Replaces the native <input type=color> swatches: a saturation/value square + hue slider, both
+   dragged with the same "mousedown -> document mousemove/mouseup" convention used by
+   ganttZoomStart/Move/End and boardSplitterStart elsewhere in this file. Per the user's request,
+   the color updates live on every drag move (row swatch + hex text included) and the indicator
+   simply stays wherever the mouse was released — there is no snap-back; the "確認" button just
+   closes the popover (the color was already live-applied to gcDraft as it dragged). */
+let gcPickerKey = null;
+let gcPickerH = 0, gcPickerS = 100, gcPickerV = 100;
+let gcSvDragging = false, gcHueDragging = false;
+
+function hsvToRgb(h,s,v){
+  s/=100; v/=100;
+  const c = v*s;
+  const x = c*(1-Math.abs((h/60)%2-1));
+  const m = v-c;
+  let r,g,b;
+  if(h<60){ r=c; g=x; b=0; }
+  else if(h<120){ r=x; g=c; b=0; }
+  else if(h<180){ r=0; g=c; b=x; }
+  else if(h<240){ r=0; g=x; b=c; }
+  else if(h<300){ r=x; g=0; b=c; }
+  else { r=c; g=0; b=x; }
+  return [Math.round((r+m)*255), Math.round((g+m)*255), Math.round((b+m)*255)];
+}
+function rgbToHex(r,g,b){
+  return '#'+[r,g,b].map(n=>Math.max(0,Math.min(255,n)).toString(16).padStart(2,'0')).join('');
+}
+function hsvToHex(h,s,v){ const [r,g,b] = hsvToRgb(h,s,v); return rgbToHex(r,g,b); }
+function hexToRgb(hex){
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex||'');
+  if(!m) return [0,0,0];
+  return [parseInt(m[1],16), parseInt(m[2],16), parseInt(m[3],16)];
+}
+function rgbToHsv(r,g,b){
+  r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b), d=max-min;
+  let h=0;
+  if(d!==0){
+    if(max===r) h = 60*(((g-b)/d)%6);
+    else if(max===g) h = 60*((b-r)/d+2);
+    else h = 60*((r-g)/d+4);
+  }
+  if(h<0) h+=360;
+  const s = max===0 ? 0 : d/max;
+  return [h, s*100, max*100];
+}
+function hexToHsv(hex){ const [r,g,b] = hexToRgb(hex); return rgbToHsv(r,g,b); }
+
+function gcOpenPicker(key, evt){
+  if(evt) evt.stopPropagation();
+  gcPickerKey = key;
+  const [h,s,v] = hexToHsv(gcDraft[key].color);
+  gcPickerH = h; gcPickerS = s; gcPickerV = v;
+  const pop = document.getElementById('gcPickerPopover');
+  const btn = evt ? evt.currentTarget : null;
+  if(btn){
+    const rect = btn.getBoundingClientRect();
+    const popW = 180, popH = 220;
+    pop.style.left = Math.max(4, Math.min(window.innerWidth-popW-4, rect.left)) + 'px';
+    pop.style.top = Math.max(4, Math.min(window.innerHeight-popH-4, rect.bottom+6)) + 'px';
+  }
+  pop.classList.add('open');
+  gcRenderPicker();
+}
+function gcClosePicker(){
+  const pop = document.getElementById('gcPickerPopover');
+  if(pop) pop.classList.remove('open');
+  gcPickerKey = null;
+}
+function gcConfirmPicker(){
+  // the color is already live-applied to gcDraft on every drag move / hex edit below —
+  // confirming just closes the popover, leaving the indicator exactly where it was released.
+  gcClosePicker();
+}
+function gcRenderPicker(){
+  if(!gcPickerKey) return;
+  const hex = hsvToHex(gcPickerH, gcPickerS, gcPickerV);
+  gcDraft[gcPickerKey].color = hex; // live update
+  const sq = document.getElementById('gcSvSquare');
+  sq.style.background = `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, hsl(${gcPickerH},100%,50%))`;
+  const svW = sq.clientWidth || 156, svH = sq.clientHeight || 110;
+  document.getElementById('gcSvDot').style.left = (gcPickerS/100*svW) + 'px';
+  document.getElementById('gcSvDot').style.top = ((1-gcPickerV/100)*svH) + 'px';
+  const hue = document.getElementById('gcHueSlider');
+  const hueW = hue.clientWidth || 156;
+  document.getElementById('gcHueDot').style.left = (gcPickerH/360*hueW) + 'px';
+  document.getElementById('gcHexInput').value = hex;
+  document.getElementById('gcPickerPreview').style.background = hex;
+  renderGanttColorRowsUI(); // live preview in the row's swatch/hex/pattern icons while dragging
+}
+function gcHexInputChanged(value){
+  const v = (value||'').trim();
+  const hex = /^#?[0-9a-fA-F]{6}$/.test(v) ? (v[0]==='#'?v:'#'+v) : null;
+  if(!hex || !gcPickerKey) return;
+  const [h,s,val] = hexToHsv(hex);
+  gcPickerH = h; gcPickerS = s; gcPickerV = val;
+  gcRenderPicker();
+}
+function gcSvStart(e){
+  e.preventDefault();
+  gcSvDragging = true;
+  gcSvMove(e);
+  document.addEventListener('mousemove', gcSvMove);
+  document.addEventListener('mouseup', gcSvEnd);
+}
+function gcSvMove(e){
+  if(!gcSvDragging || !gcPickerKey) return;
+  const rect = document.getElementById('gcSvSquare').getBoundingClientRect();
+  const x = Math.max(0, Math.min(rect.width, e.clientX-rect.left));
+  const y = Math.max(0, Math.min(rect.height, e.clientY-rect.top));
+  gcPickerS = rect.width ? (x/rect.width)*100 : 0;
+  gcPickerV = rect.height ? (1-y/rect.height)*100 : 0;
+  gcRenderPicker();
+}
+function gcSvEnd(){
+  gcSvDragging = false;
+  document.removeEventListener('mousemove', gcSvMove);
+  document.removeEventListener('mouseup', gcSvEnd);
+}
+function gcHueStart(e){
+  e.preventDefault();
+  gcHueDragging = true;
+  gcHueMove(e);
+  document.addEventListener('mousemove', gcHueMove);
+  document.addEventListener('mouseup', gcHueEnd);
+}
+function gcHueMove(e){
+  if(!gcHueDragging || !gcPickerKey) return;
+  const rect = document.getElementById('gcHueSlider').getBoundingClientRect();
+  const x = Math.max(0, Math.min(rect.width, e.clientX-rect.left));
+  gcPickerH = rect.width ? (x/rect.width)*360 : 0;
+  gcRenderPicker();
+}
+function gcHueEnd(){
+  gcHueDragging = false;
+  document.removeEventListener('mousemove', gcHueMove);
+  document.removeEventListener('mouseup', gcHueEnd);
+}
+document.addEventListener('click', function(e){
+  if(!gcPickerKey) return;
+  if(!e.target.closest('#gcPickerPopover') && !e.target.closest('.gc-swatch-btn')) gcClosePicker();
+});
 
 function renderGantt(){
   const critOnly = document.getElementById('critOnly').checked;
@@ -2616,6 +2860,27 @@ function renderGantt(){
     todayLine = `<line class="today-line" x1="${tx}" y1="${headerH}" x2="${tx}" y2="${headerH+rows.length*rowH}"></line>`;
   }
 
+  // v41: SVG <pattern> defs for the 斜線 (stripes) fill option — CSS backgrounds (used by the legend
+  // swatches and the WBS table's progress cell, see cssPatternBackground()) don't apply to SVG shapes,
+  // so the Gantt chart's own bars/milestones/summary shapes need real <pattern> elements instead.
+  const gcPatternDefs = GANTT_PATTERN_KEYS.map(k=>{
+    const c = ganttStyles[k].color;
+    return `<pattern id="gcpattern-${k}" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)"><rect width="8" height="8" fill="#fff"></rect><rect width="4" height="8" fill="${c}"></rect></pattern>`;
+  }).join('');
+  // fill/stroke for one of the 5 pattern-capable categories: solid -> plain fill; hollow -> transparent
+  // fill with the category's own color as the outline (matches cssPatternBackground's 'transparent' +
+  // border look used elsewhere); stripes -> the matching <pattern> above.
+  function gcShapeFill(key){
+    const st = ganttStyles[key];
+    if(st.pattern==='hollow') return { fill:'none', stroke:st.color, strokeWidth:1.4 };
+    if(st.pattern==='stripes') return { fill:`url(#gcpattern-${key})`, stroke:null, strokeWidth:0 };
+    return { fill:st.color, stroke:null, strokeWidth:0 };
+  }
+  function gcShapeAttrs(key){
+    const f = gcShapeFill(key);
+    return `fill="${f.fill}"${f.stroke?` stroke="${f.stroke}" stroke-width="${f.strokeWidth}"`:''}`;
+  }
+
   // bars
   let bars='';
   rows.forEach((t,i)=>{
@@ -2623,24 +2888,32 @@ function renderGantt(){
     const cy = y + rowH/2;
     if(hasKids(t)){
       const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
-      bars += `<rect class="summary-bar-shape" x="${x0}" y="${cy-4}" width="${Math.max(4,x1-x0)}" height="8" rx="2"></rect>`;
-      bars += `<polygon class="summary-bar-shape" points="${x0},${cy-4} ${x0+7},${cy-4} ${x0},${cy+6}"></polygon>`;
-      bars += `<polygon class="summary-bar-shape" points="${x1},${cy-4} ${x1-7},${cy-4} ${x1},${cy+6}"></polygon>`;
+      const sa = gcShapeAttrs('summary');
+      bars += `<rect ${sa} x="${x0}" y="${cy-4}" width="${Math.max(4,x1-x0)}" height="8" rx="2"></rect>`;
+      bars += `<polygon ${sa} points="${x0},${cy-4} ${x0+7},${cy-4} ${x0},${cy+6}"></polygon>`;
+      bars += `<polygon ${sa} points="${x1},${cy-4} ${x1-7},${cy-4} ${x1},${cy+6}"></polygon>`;
       return;
     }
     if(t.milestone){
       const x = xOfDate(t.startDate)+pxPerDay/2;
-      const fill = t.progress>=100 ? ganttColors.completed : ganttColors.milestone;
-      bars += `<rect x="${x-6}" y="${cy-6}" width="12" height="12" rx="2" transform="rotate(45 ${x} ${cy})" fill="${fill}" ${t.critical?`stroke="${ganttColors.critical}" stroke-width="1.6"`:''}></rect>`;
+      const key = t.progress>=100 ? 'completed' : 'milestone';
+      const ma = gcShapeAttrs(key);
+      const critStroke = t.critical ? `stroke="${ganttStyles.critical.color}" stroke-width="1.6"` : '';
+      bars += `<rect x="${x-6}" y="${cy-6}" width="12" height="12" rx="2" transform="rotate(45 ${x} ${cy})" ${ma} ${critStroke}></rect>`;
       return;
     }
     const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
     const w = Math.max(3, x1-x0);
-    const fillColor = t.progress>=100 ? ganttColors.completed : (t.progress>0 ? ganttColors.inProgress : ganttColors.notStarted);
-    bars += `<rect class="bar-track" x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4" ${t.critical?`stroke="${ganttColors.critical}" stroke-width="1.6"`:'stroke="#e2e8f0" stroke-width="1"'}></rect>`;
+    const fillKey = t.progress>=100 ? 'completed' : (t.progress>0 ? 'inProgress' : 'notStarted');
+    bars += `<rect class="bar-track" x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4" ${t.critical?`stroke="${ganttStyles.critical.color}" stroke-width="1.6"`:'stroke="#e2e8f0" stroke-width="1"'}></rect>`;
+    // v41: always draw the not-started "remainder" segment first (full bar width) so that category's
+    // color/pattern customization is visible in the chart — previously nothing was drawn for it at all,
+    // so its custom color/pattern never showed. The progress-fill segment (drawn on top, up to fw) then
+    // covers exactly the completed portion, leaving the remainder showing the not-started style.
+    bars += `<rect ${gcShapeAttrs('notStarted')} x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4"></rect>`;
     if(t.progress>0){
       const fw = Math.max(0, w*(t.progress/100));
-      bars += `<rect x="${x0}" y="${cy-9}" width="${fw}" height="18" rx="4" fill="${fillColor}"></rect>`;
+      bars += `<rect ${gcShapeAttrs(fillKey)} x="${x0}" y="${cy-9}" width="${fw}" height="18" rx="4"></rect>`;
     }
     if(w>34){
       bars += `<text class="bar-label" x="${x0+6}" y="${cy+3}" fill="${t.progress>50?'#fff':'#334155'}">${t.progress}%</text>`;
@@ -2673,7 +2946,7 @@ function renderGantt(){
       arrows += `<path class="${cls}" d="M${x0},${y0} L${midX},${y0} L${midX},${y1} L${x1},${y1}" marker-end="url(#arrowhead)"></path>`;
       if(p.type!=='FS' || p.lag){
         const lagTxt = p.lag ? (p.lag>0?`+${p.lag}`:`${p.lag}`) : '';
-        arrows += `<text class="axis-text" x="${midX+3}" y="${(y0+y1)/2-3}" fill="${cls.includes('crit')?ganttColors.critical:'#64748b'}">${p.type}${lagTxt}</text>`;
+        arrows += `<text class="axis-text" x="${midX+3}" y="${(y0+y1)/2-3}" fill="${cls.includes('crit')?ganttStyles.critical.color:'#64748b'}">${p.type}${lagTxt}</text>`;
       }
     });
   });
@@ -2684,6 +2957,7 @@ function renderGantt(){
       <marker id="arrowhead" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
         <path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"></path>
       </marker>
+      ${gcPatternDefs}
     </defs>
     ${bands}
     <rect x="0" y="0" width="${width}" height="${headerH}" fill="#f8fafc"></rect>
