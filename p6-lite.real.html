@@ -173,6 +173,35 @@
   .rel-pick-empty{padding:14px 10px; font-size:12.5px; color:var(--text-faint); text-align:center;}
   .checkline{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text);}
 
+  /* v44: 負責人 click-to-pick field + picker modal (mirrors the v27 rel-pick-* pattern above) */
+  .resp-picker-field{display:flex; align-items:center; justify-content:space-between; width:100%; padding:7px 9px; border:1px solid var(--border-dark); border-radius:7px; font-size:13px; font-family:inherit; color:var(--text); cursor:pointer; background:#fff; box-sizing:border-box;}
+  .resp-picker-field:hover{border-color:var(--primary);}
+  .resp-picker-field:focus{outline:none; border-color:var(--primary); box-shadow:0 0 0 2px rgba(37,99,235,.15);}
+  .resp-picker-display.resp-picker-placeholder{color:var(--text-faint);}
+  .resp-picker-arrow{color:var(--text-faint); font-size:10px; margin-left:6px;}
+  .resp-pick-item{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; border-bottom:1px solid var(--border); cursor:pointer; font-size:13px;}
+  .resp-pick-item:last-child{border-bottom:none;}
+  .resp-pick-item:hover{background:#eef2ff;}
+  .resp-pick-item.resp-pick-selected{background:#e0e7ff; font-weight:600;}
+  .resp-pick-item .resp-pick-dept{color:var(--text-faint); font-size:11.5px; flex:none;}
+  .resp-pick-item.resp-pick-add{color:var(--primary); font-style:italic;}
+  .resp-pick-item.resp-pick-clear{color:var(--text-faint); font-style:italic;}
+
+  /* v45: 負責人管理視窗 — build the roster directly, independent of any one task */
+  .owner-mgmt-modal{width:600px;}
+  .owner-mgmt-head, .owner-mgmt-row{display:grid; grid-template-columns:1fr 1fr 1fr 64px 26px; gap:8px; align-items:center;}
+  .owner-mgmt-head{font-size:11px; font-weight:600; color:var(--text-dim); padding:0 2px 6px;}
+  .owner-mgmt-list{border:1px solid var(--border-dark); border-radius:7px; max-height:260px; overflow:auto; margin-bottom:10px;}
+  .owner-mgmt-row{padding:6px 8px; border-bottom:1px solid var(--border);}
+  .owner-mgmt-row:last-child{border-bottom:none;}
+  .owner-mgmt-row .om-name{font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .owner-mgmt-row input[type=text]{width:100%; padding:5px 7px; border:1px solid var(--border-dark); border-radius:6px; font-size:12.5px; font-family:inherit; color:var(--text); box-sizing:border-box;}
+  .owner-mgmt-row .om-taskcount{font-size:11.5px; color:var(--text-faint); text-align:right;}
+  .om-delete-btn{border:none; background:none; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 4px; border-radius:5px;}
+  .om-delete-btn:hover{color:#fff; background:var(--danger);}
+  .owner-mgmt-add-row{display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px; align-items:center; padding:8px; border:1px dashed var(--border-dark); border-radius:7px;}
+  .owner-mgmt-add-row input[type=text]{padding:6px 8px; border:1px solid var(--border-dark); border-radius:6px; font-size:12.5px; font-family:inherit; box-sizing:border-box;}
+
   /* v33: Timescale dialog — per-tier unit/mode rows */
   .modal-timescale{width:560px;}
   .ts-row{display:flex; align-items:center; gap:8px; margin-bottom:6px;}
@@ -320,6 +349,7 @@
 
   <div class="toolbar">
     <button class="btn primary" onclick="quickAddTask()">＋ 新增任務</button>
+    <button class="btn" onclick="openOwnerMgmt()" title="建立/編輯負責人名冊，之後在任務裡就能直接從清單挑選指派">👥 負責人管理</button>
     <button class="btn" id="undoBtn" onclick="undo()" title="復原上一步變更（Ctrl+Z）" disabled>↶ 上一步</button>
     <button class="btn" id="redoBtn" onclick="redo()" title="重做（Ctrl+Shift+Z）" disabled>↷ 下一步</button>
     <label class="toggle"><input type="checkbox" id="critOnly" onchange="render()"> 只顯示關鍵路徑</label>
@@ -404,8 +434,11 @@
       <div class="field-row">
         <div class="field">
           <label>負責人</label>
-          <input type="text" id="f_resp" list="respList" placeholder="選擇或輸入姓名">
-          <datalist id="respList"></datalist>
+          <div class="resp-picker-field" id="f_resp_field" tabindex="0" onclick="openRespPicker()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openRespPicker();}">
+            <span id="f_resp_display" class="resp-picker-display resp-picker-placeholder">（未指定）</span>
+            <span class="resp-picker-arrow">▾</span>
+          </div>
+          <input type="hidden" id="f_resp" value="">
         </div>
         <div class="field">
           <label id="f_durLabel">工期（日曆天）</label>
@@ -452,6 +485,43 @@
     <div class="rel-pick-list" id="relPickList"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeRelPicker()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- v44: 負責人 picker modal, opened from the task modal's 負責人 field — lists everyone already known
+     (從負責人 sheet 同步回來的名冊 + 任何已被指派過的姓名), filterable by姓名/部門，並保留原本可直接輸入
+     新姓名的彈性（找不到符合項目時顯示「＋ 新增」）。 -->
+<div class="overlay" id="respPickOverlay">
+  <div class="modal rel-pick-modal">
+    <h2>選擇負責人</h2>
+    <input type="text" id="respPickSearch" class="rel-pick-search" placeholder="搜尋姓名或部門，或輸入新姓名…" oninput="renderRespPickList(this.value)" onkeydown="respPickSearchKeydown(event)">
+    <div class="rel-pick-list" id="respPickList"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeRespPicker()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- v45: 負責人管理視窗— build the roster directly (name + optional 部門/聯絡方式), independent of any
+     one task. Opened from the toolbar's "👥 負責人管理" button; the v44 picker above reads from the same
+     owners[] array, so anyone added here is immediately selectable when assigning a task. -->
+<div class="overlay" id="ownerMgmtOverlay">
+  <div class="modal owner-mgmt-modal">
+    <h2>負責人管理</h2>
+    <div class="hint" style="margin:-8px 0 12px;">在這裡建立公司內的負責人名冊，之後在任務的「負責人」欄位就能直接從清單挑選指派。從名冊移除不會清空已指派任務上的負責人欄位，但該人的部門/聯絡方式資訊會遺失。</div>
+    <div class="owner-mgmt-head">
+      <span>姓名</span><span>部門</span><span>聯絡方式</span><span>任務數</span><span></span>
+    </div>
+    <div class="owner-mgmt-list" id="ownerMgmtList"></div>
+    <div class="owner-mgmt-add-row">
+      <input type="text" id="omNewName" placeholder="新姓名" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnerFromMgmt();}">
+      <input type="text" id="omNewDept" placeholder="部門（選填）" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnerFromMgmt();}">
+      <input type="text" id="omNewContact" placeholder="聯絡方式（選填）" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnerFromMgmt();}">
+      <button type="button" class="btn primary" onclick="addOwnerFromMgmt()">＋ 新增</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeOwnerMgmt()">關閉</button>
     </div>
   </div>
 </div>
@@ -3083,6 +3153,117 @@ function respOptions(){
   owners.forEach(o=>{ if(o.name) set.add(o.name); }); // include people entered in the 負責人 sheet even if not currently assigned to any task
   return [...set];
 }
+/* ---------- v44: 負責人 click-to-pick modal ----------
+   Replaces the old free-text <input list="respList"> with a proper picker (same pattern as the v27
+   relationship task-picker: openRelPicker/renderRelPickList/pickRelTask). f_resp stays a hidden input
+   holding the actual value that saveTask() reads — only the display span + this modal change. */
+function updateRespDisplay(){
+  const disp = document.getElementById('f_resp_display');
+  if(!disp) return;
+  const v = document.getElementById('f_resp').value;
+  disp.textContent = v || '（未指定）';
+  disp.classList.toggle('resp-picker-placeholder', !v);
+}
+function respPickCandidates(){
+  return respOptions().map(n=>{
+    const o = owners.find(x=>x.name===n);
+    return {name:n, dept:o?o.dept:''};
+  }).sort((a,b)=>a.name.localeCompare(b.name));
+}
+function openRespPicker(){
+  const search = document.getElementById('respPickSearch');
+  search.value = '';
+  renderRespPickList('');
+  document.getElementById('respPickOverlay').classList.add('open');
+  search.focus();
+}
+function closeRespPicker(){
+  document.getElementById('respPickOverlay').classList.remove('open');
+}
+function renderRespPickList(query){
+  const list = document.getElementById('respPickList');
+  if(!list) return;
+  const q = (query||'').trim();
+  const ql = q.toLowerCase();
+  const currentVal = document.getElementById('f_resp').value;
+  const candidates = respPickCandidates().filter(c=>!ql || c.name.toLowerCase().includes(ql) || (c.dept||'').toLowerCase().includes(ql));
+  let html = `<div class="resp-pick-item resp-pick-clear" onclick="pickRespName('')">（不指定負責人）</div>`;
+  html += candidates.map(c=>`
+        <div class="resp-pick-item ${c.name===currentVal?'resp-pick-selected':''}" onclick="pickRespName('${escAttr(c.name)}')">
+          <span class="resp-pick-name">${c.name}</span>
+          ${c.dept?`<span class="resp-pick-dept">${c.dept}</span>`:''}
+        </div>`).join('');
+  if(q && !candidates.some(c=>c.name===q)){
+    html += `<div class="resp-pick-item resp-pick-add" onclick="pickRespName('${escAttr(q)}')">＋ 新增「${q}」</div>`;
+  }
+  list.innerHTML = html;
+}
+function respPickSearchKeydown(e){
+  if(e.key!=='Enter') return;
+  e.preventDefault();
+  const list = document.getElementById('respPickList');
+  const first = list && list.querySelector('.resp-pick-item:not(.resp-pick-clear)');
+  if(first) first.click();
+}
+function pickRespName(name){
+  document.getElementById('f_resp').value = name;
+  updateRespDisplay();
+  closeRespPicker();
+}
+/* ---------- v45: 負責人管理視窗 ----------
+   Lets someone build the owners[] roster directly (name + optional 部門/聯絡方式) without having to open
+   a task first — the v44 picker above reads the same owners[] array, so anyone added here is immediately
+   selectable there. Purely a local-first edit like everything else in this app: nothing is pushed to the
+   Sheet until the person clicks 💾 同步. */
+function openOwnerMgmt(){
+  renderOwnerMgmtList();
+  document.getElementById('ownerMgmtOverlay').classList.add('open');
+  document.getElementById('omNewName').focus();
+}
+function closeOwnerMgmt(){
+  document.getElementById('ownerMgmtOverlay').classList.remove('open');
+}
+function renderOwnerMgmtList(){
+  const list = document.getElementById('ownerMgmtList');
+  if(!list) return;
+  computeOwners(); // refresh each person's 任務數 from the current tasks before displaying
+  list.innerHTML = owners.length
+    ? owners.map(o=>`
+        <div class="owner-mgmt-row">
+          <span class="om-name" title="${escAttr(o.name)}">${o.name}</span>
+          <input type="text" class="om-dept" value="${escAttr(o.dept||'')}" placeholder="部門" onchange="updateOwnerField('${escAttr(o.name)}','dept',this.value)">
+          <input type="text" class="om-contact" value="${escAttr(o.contact||'')}" placeholder="聯絡方式" onchange="updateOwnerField('${escAttr(o.name)}','contact',this.value)">
+          <span class="om-taskcount">${o.taskCount||0} 項任務</span>
+          <button type="button" class="om-delete-btn" title="從名冊移除" onclick="deleteOwnerFromMgmt('${escAttr(o.name)}')">×</button>
+        </div>`).join('')
+    : '<div class="rel-pick-empty">尚無負責人，請在下方新增</div>';
+}
+function addOwnerFromMgmt(){
+  const nameInp = document.getElementById('omNewName');
+  const name = nameInp.value.trim();
+  if(!name){ alert('請輸入姓名'); nameInp.focus(); return; }
+  if(owners.some(o=>o.name===name)){ alert(`「${name}」已經在名冊中了`); return; }
+  const dept = document.getElementById('omNewDept').value.trim();
+  const contact = document.getElementById('omNewContact').value.trim();
+  owners.push({name, contact, dept});
+  nameInp.value = ''; document.getElementById('omNewDept').value = ''; document.getElementById('omNewContact').value = '';
+  renderOwnerMgmtList();
+  nameInp.focus();
+}
+function updateOwnerField(name, field, value){
+  const o = owners.find(x=>x.name===name);
+  if(!o) return;
+  o[field] = value.trim();
+}
+function deleteOwnerFromMgmt(name){
+  const stillUsed = tasks.some(t=>!hasKids(t) && t.responsible===name);
+  const msg = stillUsed
+    ? `「${name}」目前仍指派在部分任務上。從名冊移除後，這些任務的負責人欄位不會被清空，但這個人的部門/聯絡方式資訊會遺失。確定要移除嗎？`
+    : `確定要從名冊移除「${name}」嗎？`;
+  if(!confirm(msg)) return;
+  owners = owners.filter(o=>o.name!==name);
+  renderOwnerMgmtList();
+}
 function openAddModal(presetParent){
   editingId = null;
   document.getElementById('modalTitle').textContent = '新增任務';
@@ -3091,7 +3272,7 @@ function openAddModal(presetParent){
   document.getElementById('summaryNote').style.display = 'none';
   f_name.value=''; f_dur.value=5; f_dur.disabled=false; f_resp.value=''; f_budget.value=0; f_actual.value=0; f_progress.value=0; progVal.textContent=0; f_milestone.checked=false;
   fillParentSelect(presetParent===undefined?null:presetParent, null);
-  fillRespList();
+  updateRespDisplay();
   fillPredList(null);
   onFParentChange();
   document.getElementById('overlay').classList.add('open');
@@ -3110,7 +3291,7 @@ function openEditModal(id){
     f_dur.value=t.duration; f_dur.disabled=false; f_resp.value=t.responsible||'';
     f_budget.value=t.budget||0; f_actual.value=t.actual||0; f_progress.value=t.progress||0; progVal.textContent=t.progress||0;
     f_milestone.checked = !!t.milestone;
-    fillRespList();
+    updateRespDisplay();
     fillPredList(id, t.preds||[]);
     onFParentChange();
   }
@@ -3147,9 +3328,6 @@ function fillParentSelect(selected, excludeId){
   }
   walk(null, 0);
   document.getElementById('f_parent').innerHTML = html;
-}
-function fillRespList(){
-  document.getElementById('respList').innerHTML = respOptions().map(r=>`<option value="${r}">`).join('');
 }
 function fillPredList(selfId, existingPreds){
   existingPreds = existingPreds || [];
