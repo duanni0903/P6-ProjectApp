@@ -88,7 +88,10 @@
   .col-name{overflow:hidden; text-overflow:ellipsis;}
   .indent1{padding-left:20px !important;}
   .collapse-btn{display:inline-block; width:14px; cursor:pointer; color:var(--text-dim); font-size:10px;}
-  .col-resp{color:var(--text-dim);}
+  .col-resp{color:var(--text-dim); padding:0 4px !important;}
+  .resp-inline-select{width:100%; max-width:100%; font-size:12.5px; font-family:inherit; color:var(--text-dim); background:transparent; border:1px solid transparent; border-radius:4px; padding:2px; cursor:pointer;}
+  .resp-inline-select:hover{background:var(--accent-dim, rgba(90,140,255,.14)); box-shadow:inset 0 0 0 1px var(--accent, #5a8cff);}
+  .resp-inline-select:focus{outline:none; background:var(--panel); color:var(--text); border-color:var(--accent, #5a8cff); box-shadow:inset 0 0 0 1px var(--accent, #5a8cff);}
   .col-progress{}
   .prog-bar-wrap{display:flex; align-items:center; gap:6px;}
   .prog-bar{width:44px; height:6px; border-radius:3px; background:var(--border); overflow:hidden;}
@@ -1829,7 +1832,7 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
       const nameCell = `<span style="padding-left:${depth*15}px; display:inline-flex; align-items:center; gap:3px" title="${isSum?'':'前置任務: '+predText(t)}">${arrow}${nameText}</span>`;
       return `<td class="col-name" title="${t.name}">${nameCell}${chainBadge}</td>`;
     }
-    case 'resp': return `<td class="col-resp">${isSum?'':(t.responsible||'')}</td>`;
+    case 'resp': return `<td class="col-resp">${isSum?'':respSelectHtml(t)}</td>`;
     case 'start': return `<td>${fmtROC(t.startDate)}</td>`;
     case 'end': return `<td>${fmtROC(t.endDate)}</td>`;
     case 'lateStart': return `<td>${t.lateStartDate?fmtROC(t.lateStartDate):''}</td>`;
@@ -1861,6 +1864,27 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'milestoneFlag': return `<td style="text-align:center">${t.milestone?'◆':''}</td>`;
     default: return '<td></td>';
   }
+}
+// v46: WBS 表格的「負責人」欄位直接是個下拉選單（不用另外點開任務視窗或選擇器彈窗）——選項來自
+// respOptions()（負責人管理名冊 + 任何任務目前已使用的姓名），選一個立刻指派並記入復原堆疊，
+// 跟 工期/任務名稱/Activity ID 的快速表格內編輯是同一套「不用開 Modal」的精神，只是這格本來就該是
+// 選單而不是文字輸入。
+function respSelectHtml(t){
+  const cur = t.responsible||'';
+  const names = respOptions();
+  let html = `<option value=""${cur===''?' selected':''}>（未指定）</option>`;
+  html += names.map(n=>`<option value="${escAttr(n)}"${n===cur?' selected':''}>${n}</option>`).join('');
+  return `<select class="resp-inline-select" onclick="event.stopPropagation()" onchange="commitRespInline(this,'${t.id}')" title="指派負責人">${html}</select>`;
+}
+function commitRespInline(sel, id){
+  const t = tasks.find(x=>x.id===id);
+  if(!t) return;
+  const v = sel.value;
+  if(v === (t.responsible||'')) return;
+  const _pre = snapshotTasks();
+  t.responsible = v;
+  render();
+  pushUndoSnapshot(_pre);
 }
 // quick inline editing for the 工期 (duration) cell — click straight into the number without
 // opening the full edit Modal. start/end 日期 are computed by CPM from duration+相依關係, so they
