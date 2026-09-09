@@ -517,6 +517,7 @@
 <div class="ctx-menu" id="ganttBarsCtxMenu" onclick="event.stopPropagation()">
   <button onclick="openGanttColorDialog()">🎨 甘特圖顏色…</button>
   <button id="depLinesMenuItem" onclick="toggleDependencyLines()">☑ 顯示相依關係線</button>
+  <button id="critHighlightMenuItem" onclick="toggleCriticalHighlight()">☑ 顯示要徑（紅色）</button>
 </div>
 
 <div class="overlay" id="ganttColorOverlay">
@@ -2583,12 +2584,43 @@ function toggleDependencyLines(){
   renderGantt();
 }
 
+// v43: whether 關鍵路徑 (critical path, float/浮時 = 0) is highlighted in its own 關鍵路徑 color/pattern
+// anywhere in the Gantt chart — toggled from the same right-click menu, per the user's request. When
+// off, every bar/milestone/dependency-arrow renders exactly as if none of those tasks were critical (a
+// not-started critical task falls back to the plain 未開始 color, per the user's own wording). This is
+// purely a chart DISPLAY toggle: t.critical itself (and things that read it directly, like the toolbar's
+// "只顯示關鍵路徑" filter, the 關鍵路徑任務 stat, and the WBS table's critical-row highlight) is untouched
+// — only whether renderGantt() applies the special critical styling. Defaults to on/shown.
+let ganttShowCriticalHighlight = true;
+const GANTT_CRIT_HIGHLIGHT_STORAGE_KEY = 'p6lite_show_critical_v1';
+function saveCritHighlightPref(){
+  try{ localStorage.setItem(GANTT_CRIT_HIGHLIGHT_STORAGE_KEY, ganttShowCriticalHighlight ? '1' : '0'); }
+  catch(err){ console.warn('無法儲存要徑顯示設定', err); }
+}
+function loadCritHighlightPref(){
+  try{
+    const raw = localStorage.getItem(GANTT_CRIT_HIGHLIGHT_STORAGE_KEY);
+    if(raw!==null) ganttShowCriticalHighlight = raw === '1';
+  }catch(err){
+    console.warn('無法讀取要徑顯示設定，使用預設值', err);
+  }
+}
+loadCritHighlightPref(); // apply before the first render() so there's no flash of the default (shown) state
+function toggleCriticalHighlight(){
+  ganttShowCriticalHighlight = !ganttShowCriticalHighlight;
+  saveCritHighlightPref();
+  hideGanttBarsMenu();
+  renderGantt();
+}
+
 /* ---------- v40: Gantt bars right-click menu -> color customization dialog ---------- */
 function showGanttBarsMenu(e){
   e.preventDefault();
   e.stopPropagation(); // same fix as the other context menus: avoid the document-level listener closing this immediately
   const depItem = document.getElementById('depLinesMenuItem');
   if(depItem) depItem.textContent = (ganttShowDependencyLines ? '☑' : '☐') + ' 顯示相依關係線';
+  const critItem = document.getElementById('critHighlightMenuItem');
+  if(critItem) critItem.textContent = (ganttShowCriticalHighlight ? '☑' : '☐') + ' 顯示要徑（紅色）';
   const menu = document.getElementById('ganttBarsCtxMenu');
   menu.style.display = 'block';
   menu.style.left = e.clientX+'px';
@@ -2938,18 +2970,22 @@ function renderGantt(){
       bars += `<polygon ${sa} points="${x1},${cy-4} ${x1-7},${cy-4} ${x1},${cy+6}"></polygon>`;
       return;
     }
+    // v43: 關鍵路徑 styling only actually applies when ganttShowCriticalHighlight is on — with it off, a
+    // task renders exactly as if t.critical were false (falls back to its plain status color), even
+    // though t.critical itself is untouched (still drives the toolbar's "只顯示關鍵路徑" filter etc).
+    const critStyled = t.critical && ganttShowCriticalHighlight;
     if(t.milestone){
       const x = xOfDate(t.startDate)+pxPerDay/2;
       const key = t.progress>=100 ? 'completed' : 'milestone';
       const ma = gcShapeAttrs(key);
-      const critStroke = t.critical ? `stroke="${ganttStyles.critical.color}" stroke-width="1.6"` : '';
+      const critStroke = critStyled ? `stroke="${ganttStyles.critical.color}" stroke-width="1.6"` : '';
       bars += `<rect x="${x-6}" y="${cy-6}" width="12" height="12" rx="2" transform="rotate(45 ${x} ${cy})" ${ma} ${critStroke}></rect>`;
       return;
     }
     const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
     const w = Math.max(3, x1-x0);
     const fillKey = t.progress>=100 ? 'completed' : (t.progress>0 ? 'inProgress' : 'notStarted');
-    bars += `<rect class="bar-track" x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4" ${t.critical?`stroke="${ganttStyles.critical.color}" stroke-width="1.6"`:'stroke="#e2e8f0" stroke-width="1"'}></rect>`;
+    bars += `<rect class="bar-track" x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4" ${critStyled?`stroke="${ganttStyles.critical.color}" stroke-width="1.6"`:'stroke="#e2e8f0" stroke-width="1"'}></rect>`;
     // v41: always draw the "remainder" segment first (full bar width) so that category's color/pattern
     // customization is visible in the chart — previously nothing was drawn for it at all, so its custom
     // color/pattern never showed. The progress-fill segment (drawn on top, up to fw) then covers exactly
@@ -2958,7 +2994,8 @@ function renderGantt(){
     // fill/pattern for that remainder instead of 未開始's — otherwise this same full-width remainder
     // rect, drawn solid on top, was visually swallowing almost all of the thin critical outline stroke
     // drawn just above it, so a not-started critical task looked just like an ordinary grey one.
-    const remainderKey = (t.critical && t.progress===0) ? 'critical' : 'notStarted';
+    // v43: only when critStyled — with "顯示要徑" off, it falls back to plain 未開始, per the user's request.
+    const remainderKey = (critStyled && t.progress===0) ? 'critical' : 'notStarted';
     bars += `<rect ${gcShapeAttrs(remainderKey)} x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4"></rect>`;
     if(t.progress>0){
       const fw = Math.max(0, w*(t.progress/100));
@@ -2994,7 +3031,7 @@ function renderGantt(){
           default:   x0 = predBar.right; x1 = succBar.left;  // FS
         }
         const midX = (x0+x1)/2;
-        const cls = (t.critical && pred.critical) ? 'arrow-path crit' : 'arrow-path';
+        const cls = (ganttShowCriticalHighlight && t.critical && pred.critical) ? 'arrow-path crit' : 'arrow-path';
         arrows += `<path class="${cls}" d="M${x0},${y0} L${midX},${y0} L${midX},${y1} L${x1},${y1}" marker-end="url(#arrowhead)"></path>`;
         if(p.type!=='FS' || p.lag){
           const lagTxt = p.lag ? (p.lag>0?`+${p.lag}`:`${p.lag}`) : '';
