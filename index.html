@@ -372,7 +372,7 @@
     <div class="item"><span class="swatch" id="legendNotStarted" style="background:#94a3b8"></span> 未開始</div>
     <div class="item"><span class="swatch" id="legendInProgress" style="background:#3b82f6"></span> 進行中</div>
     <div class="item"><span class="swatch" id="legendCompleted" style="background:#16a34a"></span> 已完成</div>
-    <div class="item"><span class="swatch" id="legendCritical" style="background:transparent;border:1.6px solid #dc2626"></span> 關鍵路徑</div>
+    <div class="item"><span class="swatch" id="legendCritical" style="background:#dc2626"></span> 關鍵路徑</div>
     <div class="item"><span class="swatch diamond" id="legendMilestone" style="background:#d97706"></span> 里程碑</div>
     <div class="item"><span class="swatch" id="legendSummary" style="background:#334155"></span> 階段彙總</div>
     <div class="item"><button class="btn" id="legendColorBtn" onclick="openGanttColorDialog()" title="自訂甘特圖顏色" style="padding:2px 8px; font-size:11px; font-weight:600;">🎨 自訂顏色…</button></div>
@@ -510,11 +510,13 @@
   </div>
 </div>
 
-<!-- v40: right-click anywhere in the Gantt chart body (bars/rows — not the date-header handle, which
-     keeps its own separate Timescale menu above) opens this tiny menu, whose one item opens the color
-     customization dialog below. See showGanttBarsMenu()/openGanttColorDialog(). -->
+<!-- v40/v42: right-click anywhere in the Gantt chart body (bars/rows — not the date-header handle,
+     which keeps its own separate Timescale menu above) opens this tiny menu: one item opens the color
+     customization dialog below, the other is a checkbox-style toggle for the dependency-relationship
+     lines. See showGanttBarsMenu()/openGanttColorDialog()/toggleDependencyLines(). -->
 <div class="ctx-menu" id="ganttBarsCtxMenu" onclick="event.stopPropagation()">
   <button onclick="openGanttColorDialog()">🎨 甘特圖顏色…</button>
+  <button id="depLinesMenuItem" onclick="toggleDependencyLines()">☑ 顯示相依關係線</button>
 </div>
 
 <div class="overlay" id="ganttColorOverlay">
@@ -682,24 +684,30 @@ function loadGanttHeaderPrefs(){
 }
 loadGanttHeaderPrefs(); // apply before the first render() so there's no flash of the default layout
 
-/* ---------- v41: customizable Gantt/legend colors + fill patterns ----------
+/* ---------- v41/v42: customizable Gantt/legend colors + fill patterns ----------
    Right-click anywhere in the Gantt chart body (see showGanttBarsMenu(), wired to #ganttWrap's
    oncontextmenu in the HTML) or click the legend's own "🎨 自訂顏色…" button opens a dialog (same
    OK/Cancel-commits-a-draft pattern as the Timescale dialog above) to restyle the six semantic
-   colors used across the app: the three task-status bar colors, the critical-path outline, the
-   milestone diamond, and the summary/彙總 bar. Each (except 關鍵路徑, which is always drawn as a thin
-   outline overlaid on another bar, never its own fill — see GANTT_PATTERN_KEYS) also gets a fill
-   PATTERN: 實心 solid, 空心 hollow (outline only), or 斜線 diagonal stripes. Applying re-renders the
-   Gantt, the legend swatches, AND the WBS table's 進度 column progress bar — all three read from this
-   one `ganttStyles` object, so there's never a chance for the legend to drift out of sync with what
-   the chart actually shows. Colors are picked with a custom draggable HSV picker (see the "v41 color
-   picker" section further down) rather than the native <input type=color>, per the user's request to
-   see the color update live while dragging and only commit when they click 確認. */
+   colors used across the app: the three task-status bar colors, 關鍵路徑, the milestone diamond, and
+   the summary/彙總 bar. Every one of them (v42: including 關鍵路徑, at the user's request for parity
+   with the other categories) also gets a fill PATTERN: 實心 solid, 空心 hollow (outline only), or 斜線
+   diagonal stripes. Applying re-renders the Gantt, the legend swatches, AND the WBS table's 進度 column
+   progress bar — all three read from this one `ganttStyles` object, so there's never a chance for the
+   legend to drift out of sync with what the chart actually shows. Colors are picked with a custom
+   draggable HSV picker (see the "v41 color picker" section further down) rather than the native
+   <input type=color>, per the user's request to see the color update live while dragging and only
+   commit when they click 確認.
+   v42: 關鍵路徑's color/pattern is still also used as the thin outline stroke drawn on top of a normal
+   task bar (see renderGantt()) — that part is unaffected by pattern (an outline is an outline). What's
+   new is that a task that is BOTH 關鍵路徑 (float/浮時 = 0, t.critical) AND not yet started (progress 0)
+   now renders its bar using the 關鍵路徑 fill/pattern directly, instead of the 未開始 style — previously
+   the 未開始 fill was drawn on top of the critical outline and visually swallowed almost all of it, so a
+   not-started critical task looked just like an ordinary grey not-started task. */
 const GANTT_STYLE_DEFAULTS = Object.freeze({
   notStarted: Object.freeze({ color:'#94a3b8', pattern:'solid' }),
   inProgress: Object.freeze({ color:'#3b82f6', pattern:'solid' }),
   completed:  Object.freeze({ color:'#16a34a', pattern:'solid' }),
-  critical:   Object.freeze({ color:'#dc2626', pattern:'solid' }), // pattern unused — critical is always an outline overlay
+  critical:   Object.freeze({ color:'#dc2626', pattern:'solid' }),
   milestone:  Object.freeze({ color:'#d97706', pattern:'solid' }),
   summary:    Object.freeze({ color:'#334155', pattern:'solid' }),
 });
@@ -707,9 +715,9 @@ const GANTT_COLOR_LABELS = {
   notStarted: '未開始', inProgress: '進行中', completed: '已完成',
   critical: '關鍵路徑', milestone: '里程碑', summary: '階段彙總',
 };
-// categories that actually render as a fill (so a pattern choice is visible) — 關鍵路徑 is excluded
-// since it's always a stroke-only outline drawn on top of another bar's own fill
-const GANTT_PATTERN_KEYS = ['notStarted','inProgress','completed','milestone','summary'];
+// every category can pick a fill pattern (v42: 關鍵路徑 included, for parity with the others — see the
+// big comment above for what its pattern actually affects, since it's normally drawn as an outline)
+const GANTT_PATTERN_KEYS = ['notStarted','inProgress','completed','critical','milestone','summary'];
 const GANTT_PATTERN_LABELS = { solid:'實心', hollow:'空心', stripes:'斜線' };
 function cloneGanttStyles(src){
   const out = {};
@@ -769,13 +777,22 @@ function setGanttColorCssVars(){
   document.documentElement.style.setProperty('--gantt-critical', ganttStyles.critical.color);
 }
 function syncLegendColors(){
-  const setBg = (id, key) => { const el = document.getElementById(id); if(el) el.style.background = cssPatternBackground(ganttStyles[key].color, ganttStyles[key].pattern); };
-  setBg('legendNotStarted', 'notStarted');
-  setBg('legendInProgress', 'inProgress');
-  setBg('legendCompleted', 'completed');
-  const critEl = document.getElementById('legendCritical'); if(critEl) critEl.style.borderColor = ganttStyles.critical.color;
-  setBg('legendMilestone', 'milestone');
-  setBg('legendSummary', 'summary');
+  // v42: every swatch (critical included) now follows the same color+pattern rule — a 空心 (hollow)
+  // pattern needs an explicit border or it would just be an invisible transparent box on the page's
+  // light background, matching the border trick the WBS table's progress cell already uses.
+  const setSwatch = (id, key) => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    const st = ganttStyles[key];
+    el.style.background = cssPatternBackground(st.color, st.pattern);
+    el.style.border = st.pattern==='hollow' ? `1.6px solid ${st.color}` : '';
+  };
+  setSwatch('legendNotStarted', 'notStarted');
+  setSwatch('legendInProgress', 'inProgress');
+  setSwatch('legendCompleted', 'completed');
+  setSwatch('legendCritical', 'critical');
+  setSwatch('legendMilestone', 'milestone');
+  setSwatch('legendSummary', 'summary');
 }
 setGanttColorCssVars();
 syncLegendColors();
@@ -2541,10 +2558,37 @@ function applyTimescaleDialog(){
   closeTimescaleDialog();
 }
 
+// v42: whether the dependency-relationship arrows (FS/SS/FF/SF lines + lag labels) are drawn at all —
+// toggled from the ✓ checkbox item in the Gantt bars right-click menu below, per the user's request to
+// be able to turn the relationship lines on/off from that same menu. Defaults to on/shown.
+let ganttShowDependencyLines = true;
+const GANTT_DEP_LINES_STORAGE_KEY = 'p6lite_show_dep_lines_v1';
+function saveDepLinesPref(){
+  try{ localStorage.setItem(GANTT_DEP_LINES_STORAGE_KEY, ganttShowDependencyLines ? '1' : '0'); }
+  catch(err){ console.warn('無法儲存相依關係線顯示設定', err); }
+}
+function loadDepLinesPref(){
+  try{
+    const raw = localStorage.getItem(GANTT_DEP_LINES_STORAGE_KEY);
+    if(raw!==null) ganttShowDependencyLines = raw === '1';
+  }catch(err){
+    console.warn('無法讀取相依關係線顯示設定，使用預設值', err);
+  }
+}
+loadDepLinesPref(); // apply before the first render() so there's no flash of the default (shown) state
+function toggleDependencyLines(){
+  ganttShowDependencyLines = !ganttShowDependencyLines;
+  saveDepLinesPref();
+  hideGanttBarsMenu();
+  renderGantt();
+}
+
 /* ---------- v40: Gantt bars right-click menu -> color customization dialog ---------- */
 function showGanttBarsMenu(e){
   e.preventDefault();
   e.stopPropagation(); // same fix as the other context menus: avoid the document-level listener closing this immediately
+  const depItem = document.getElementById('depLinesMenuItem');
+  if(depItem) depItem.textContent = (ganttShowDependencyLines ? '☑' : '☐') + ' 顯示相依關係線';
   const menu = document.getElementById('ganttBarsCtxMenu');
   menu.style.display = 'block';
   menu.style.left = e.clientX+'px';
@@ -2906,11 +2950,16 @@ function renderGantt(){
     const w = Math.max(3, x1-x0);
     const fillKey = t.progress>=100 ? 'completed' : (t.progress>0 ? 'inProgress' : 'notStarted');
     bars += `<rect class="bar-track" x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4" ${t.critical?`stroke="${ganttStyles.critical.color}" stroke-width="1.6"`:'stroke="#e2e8f0" stroke-width="1"'}></rect>`;
-    // v41: always draw the not-started "remainder" segment first (full bar width) so that category's
-    // color/pattern customization is visible in the chart — previously nothing was drawn for it at all,
-    // so its custom color/pattern never showed. The progress-fill segment (drawn on top, up to fw) then
-    // covers exactly the completed portion, leaving the remainder showing the not-started style.
-    bars += `<rect ${gcShapeAttrs('notStarted')} x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4"></rect>`;
+    // v41: always draw the "remainder" segment first (full bar width) so that category's color/pattern
+    // customization is visible in the chart — previously nothing was drawn for it at all, so its custom
+    // color/pattern never showed. The progress-fill segment (drawn on top, up to fw) then covers exactly
+    // the completed portion, leaving the remainder showing underneath.
+    // v42: a not-started (progress 0) task that is ALSO 關鍵路徑 (float/浮時 = 0) uses the 關鍵路徑
+    // fill/pattern for that remainder instead of 未開始's — otherwise this same full-width remainder
+    // rect, drawn solid on top, was visually swallowing almost all of the thin critical outline stroke
+    // drawn just above it, so a not-started critical task looked just like an ordinary grey one.
+    const remainderKey = (t.critical && t.progress===0) ? 'critical' : 'notStarted';
+    bars += `<rect ${gcShapeAttrs(remainderKey)} x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4"></rect>`;
     if(t.progress>0){
       const fw = Math.max(0, w*(t.progress/100));
       bars += `<rect ${gcShapeAttrs(fillKey)} x="${x0}" y="${cy-9}" width="${fw}" height="18" rx="4"></rect>`;
@@ -2921,35 +2970,39 @@ function renderGantt(){
   });
 
   // dependency arrows (FS / SS / FF / SF, with lag/lead labels)
+  // v42: shown/hidden entirely via ganttShowDependencyLines (right-click menu toggle, see below) — the
+  // computation itself is just skipped when hidden, since it's the same rows/preds work either way.
   function barX(t){
     if(t.milestone){ const c = xOfDate(t.startDate)+pxPerDay/2; return {left:c, right:c}; }
     return {left:xOfDate(t.startDate), right:xOfDate(t.endDate)+pxPerDay};
   }
   let arrows='';
-  rows.forEach(t=>{
-    if(hasKids(t)) return;
-    (t.preds||[]).forEach(p=>{
-      if(rowIndex[p.id]===undefined || rowIndex[t.id]===undefined) return;
-      const pred = tasks.find(x=>x.id===p.id);
-      const y0 = headerH + rowIndex[p.id]*rowH + rowH/2;
-      const y1 = headerH + rowIndex[t.id]*rowH + rowH/2;
-      const predBar = barX(pred), succBar = barX(t);
-      let x0, x1;
-      switch(p.type){
-        case 'SS': x0 = predBar.left;  x1 = succBar.left;  break;
-        case 'FF': x0 = predBar.right; x1 = succBar.right; break;
-        case 'SF': x0 = predBar.left;  x1 = succBar.right; break;
-        default:   x0 = predBar.right; x1 = succBar.left;  // FS
-      }
-      const midX = (x0+x1)/2;
-      const cls = (t.critical && pred.critical) ? 'arrow-path crit' : 'arrow-path';
-      arrows += `<path class="${cls}" d="M${x0},${y0} L${midX},${y0} L${midX},${y1} L${x1},${y1}" marker-end="url(#arrowhead)"></path>`;
-      if(p.type!=='FS' || p.lag){
-        const lagTxt = p.lag ? (p.lag>0?`+${p.lag}`:`${p.lag}`) : '';
-        arrows += `<text class="axis-text" x="${midX+3}" y="${(y0+y1)/2-3}" fill="${cls.includes('crit')?ganttStyles.critical.color:'#64748b'}">${p.type}${lagTxt}</text>`;
-      }
+  if(ganttShowDependencyLines){
+    rows.forEach(t=>{
+      if(hasKids(t)) return;
+      (t.preds||[]).forEach(p=>{
+        if(rowIndex[p.id]===undefined || rowIndex[t.id]===undefined) return;
+        const pred = tasks.find(x=>x.id===p.id);
+        const y0 = headerH + rowIndex[p.id]*rowH + rowH/2;
+        const y1 = headerH + rowIndex[t.id]*rowH + rowH/2;
+        const predBar = barX(pred), succBar = barX(t);
+        let x0, x1;
+        switch(p.type){
+          case 'SS': x0 = predBar.left;  x1 = succBar.left;  break;
+          case 'FF': x0 = predBar.right; x1 = succBar.right; break;
+          case 'SF': x0 = predBar.left;  x1 = succBar.right; break;
+          default:   x0 = predBar.right; x1 = succBar.left;  // FS
+        }
+        const midX = (x0+x1)/2;
+        const cls = (t.critical && pred.critical) ? 'arrow-path crit' : 'arrow-path';
+        arrows += `<path class="${cls}" d="M${x0},${y0} L${midX},${y0} L${midX},${y1} L${x1},${y1}" marker-end="url(#arrowhead)"></path>`;
+        if(p.type!=='FS' || p.lag){
+          const lagTxt = p.lag ? (p.lag>0?`+${p.lag}`:`${p.lag}`) : '';
+          arrows += `<text class="axis-text" x="${midX+3}" y="${(y0+y1)/2-3}" fill="${cls.includes('crit')?ganttStyles.critical.color:'#64748b'}">${p.type}${lagTxt}</text>`;
+        }
+      });
     });
-  });
+  }
 
   const svg = `
   <svg width="${width}" height="${height}">
