@@ -3469,11 +3469,15 @@ function exportGanttHtml(){
   const critOnly = document.getElementById('critOnly').checked;
   const rows = visibleRows().filter(t=> !(critOnly && !t.critical));
   const cols = visibleColumns();
-  // v52: a shrunk row-height (was 34px) — the whole with-Gantt export favors a smaller baseline size so
-  // more of it fits on one printed page; the auto-scale script in exportToPdfWithGantt() still shrinks
-  // further on top of this if needed.
-  const TIER_ROW_H = 22;
-  const rowH = 24;
+  // v54 fix: these MUST match the actual row/header pixel geometry renderGantt() used to draw the live
+  // #ganttWrap SVG (rowH=34 / TIER_ROW_H=28, see renderGantt() above) — the SVG is embedded below at its
+  // native, un-shrunk pixel size, so if the label column here used a different (e.g. shrunk) row height,
+  // each label row would drift further out of vertical alignment with its bar the further down the list
+  // it is. Don't shrink these two independently of the SVG; if the whole thing needs to be smaller, the
+  // auto-scale script in exportToPdfWithGantt() shrinks labels+SVG together as one unit, which keeps them
+  // aligned at any scale. Only the cell font/padding below are safe to shrink on their own.
+  const TIER_ROW_H = 28;
+  const rowH = 34;
   const cellFontPx = 9;
   const headerH = TIER_ROW_H * ganttTimescaleRows.length;
   const colWidth = k => (COLUMN_META[k] && COLUMN_META[k].width) || 60;
