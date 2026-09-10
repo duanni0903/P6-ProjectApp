@@ -266,10 +266,14 @@
   .rel-col-type{width:52px; flex:none;}
   .rel-col-lag{width:60px; flex:none;}
   .rel-col-remove{width:20px; flex:none;}
+  .rel-col-jump{width:58px; flex:none;}
   .rel-type-select{width:52px; flex:none; border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 5px; font-family:inherit; background:#fff; color:var(--text);}
   .rel-lag-input{width:60px; flex:none; border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 6px; font-family:inherit;}
   .rel-remove{width:20px; flex:none; border:none; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 0; border-radius:5px; font-family:inherit; text-align:center;}
   .rel-remove:hover{background:var(--danger-bg); color:var(--danger);}
+  /* v47: jump straight to the related task's row in the WBS table/Gantt from inside the 任務相依關係 panel */
+  .rel-jump-btn{width:58px; flex:none; border:1px solid var(--border-dark); background:#fff; color:var(--text-dim); font-size:11px; line-height:1; cursor:pointer; padding:4px 2px; border-radius:6px; font-family:inherit; text-align:center; white-space:nowrap;}
+  .rel-jump-btn:hover{background:var(--accent-dim, rgba(90,140,255,.14)); color:var(--accent, #5a8cff);}
   .rel-add-btn{display:block; width:100%; margin-top:4px; border:1px dashed var(--border-dark); background:#fff; color:var(--primary-dark); border-radius:8px; font-size:12px; padding:7px 10px; cursor:pointer; font-family:inherit; font-weight:600;}
   .rel-add-btn:hover{background:#eef2ff; border-color:var(--primary);}
 
@@ -1475,6 +1479,25 @@ function selectRow(id, e){
   updateChainBar();
   renderRelPanel();
 }
+// v47: "前往任務" button in the 任務相依關係 panel — jumps straight to a related (pred/succ) task's own row,
+// expanding any collapsed ancestor階層 along the way so the row actually exists in the table to scroll
+// to, then selects it (which also flips the 相依關係 panel over to show THAT task's own relationships —
+// handy for hopping down a dependency chain) and scrolls it into view. WBS/Gantt panels already mirror
+// each other's scrollTop (see the sync listeners below), so scrolling the WBS table alone is enough.
+function jumpToTaskRow(id){
+  const t = tasks.find(x=>x.id===id);
+  if(!t) return;
+  let p = t.parent;
+  while(p!=null){
+    collapsed[p] = false;
+    const pt = tasks.find(x=>x.id===p);
+    p = pt ? pt.parent : null;
+  }
+  selectRow(id, null);
+  renderGantt(); // ancestors may have just been expanded/collapsed changed above, keep the Gantt rows in sync
+  const row = document.querySelector(`tr[data-id="${id}"]`);
+  if(row) row.scrollIntoView({block:'center', behavior:'smooth'});
+}
 function updateChainBar(){
   const bar = document.getElementById('chainBar');
   if(!bar) return;
@@ -2313,6 +2336,7 @@ function relHeaderRowHtml(mode){
     <div class="rel-item-header">
       <span class="rel-wbs"></span>
       <span class="rel-name rel-col-sortable" onclick="sortRelColumn('${mode}','name')">任務名稱${icon('name')}</span>
+      <span class="rel-col-jump"></span>
       <span class="rel-col-type rel-col-sortable" onclick="sortRelColumn('${mode}','type')">關係${icon('type')}</span>
       <span class="rel-col-lag rel-col-sortable" onclick="sortRelColumn('${mode}','lag')">Lag(D)${icon('lag')}</span>
       <span class="rel-col-remove"></span>
@@ -2335,6 +2359,7 @@ function relRowHtml(mode, ownerId, x){
     <div class="rel-item">
       <span class="rel-wbs">${x.task.wbs}</span>
       <span class="rel-name" title="${x.task.name}">${x.task.name}</span>
+      <button type="button" class="rel-jump-btn" title="跳到「${x.task.name}」這一列" onclick="jumpToTaskRow('${x.task.id}')">前往任務</button>
       <select class="rel-type-select" title="關係類型" onchange="setRelType('${taskId}','${predId}', this.value)">
         <option value="FS" ${x.type==='FS'?'selected':''}>FS</option>
         <option value="SS" ${x.type==='SS'?'selected':''}>SS</option>
