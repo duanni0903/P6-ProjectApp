@@ -81,6 +81,8 @@
   table.wbs-table tbody tr{cursor:pointer;}
   table.wbs-table tbody tr.chain-row td{background:#eef4ff !important; box-shadow:inset 0 0 0 1.5px #93c5fd;}
   table.wbs-table tbody tr.selected-row td{background:#dbeafe !important; box-shadow:inset 0 0 0 1.5px var(--primary);}
+  table.wbs-table tbody tr td.cell-selected{background:#c7ddff !important; box-shadow:inset 0 0 0 1.5px #2563eb; position:relative; z-index:1; user-select:none;}
+  table.wbs-table tbody tr td.cell-copied-flash{background:#93c5fd !important;}
   table.wbs-table tbody tr.cut-row td{opacity:.5;}
   table.wbs-table tbody tr.cut-row .col-name span{border-bottom:1px dashed var(--text-faint);}
   .chain-badge{display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; margin-left:2px; border-radius:50%; background:var(--primary); color:#fff; font-size:9px; font-weight:700; vertical-align:middle; flex:none;}
@@ -371,6 +373,7 @@
       <button class="btn" onclick="cancelCut()">取消剪下</button>
     </div>
     <span class="hint" style="margin:0 0 0 4px">點一列任務選取 → Ctrl+X 剪下 → 點目標位置 → Ctrl+V 貼到它前面</span>
+    <span class="hint" style="margin:0 0 0 4px">點一格 + Shift+點另一格可選取多格範圍 → Ctrl+C 複製，可直接貼到 Excel</span>
     <div id="chainBar" style="display:none; align-items:center; gap:6px;">
       <span id="chainLabel" class="hint" style="margin:0;"></span>
       <button class="btn primary" onclick="chainLinkTasks()">依序建立相依關係</button>
@@ -948,6 +951,8 @@ let editingId = null;
 let selectedId = null;  // currently clicked/selected task row
 let clipboardId = null; // task cut with Ctrl+X, waiting to be pasted
 let multiSelectIds = []; // ordered list of task ids built by Ctrl/Cmd+click, in click order — used to chain-link dependencies
+let cellSelAnchor = null; // {rowId, col} — v48 Excel-like cell-range selection start
+let cellSelEnd = null;    // {rowId, col} — v48 Excel-like cell-range selection end (click = anchor==end, shift+click extends)
 
 /* ---------- v39: local undo/redo + manual-only sync ----------
    Editing used to sync to the Google Sheet immediately after every change. That made an "上一步"
@@ -1600,6 +1605,13 @@ document.addEventListener('keydown', function(e){
     if(selectedId!=null){ e.preventDefault(); cutTask(); }
   } else if((e.ctrlKey||e.metaKey) && key==='v'){
     if(clipboardId!=null && selectedId!=null){ e.preventDefault(); pasteTask(); }
+  } else if((e.ctrlKey||e.metaKey) && key==='c'){
+    // v48: copy the selected WBS cell range as tab-separated text for pasting into Excel. Only takes
+    // over when there's no ordinary browser text selection active, so normal Ctrl+C (e.g. selecting
+    // text inside a cell) is never hijacked.
+    if(cellSelAnchor && cellSelEnd && window.getSelection().toString()===''){
+      e.preventDefault(); copySelectedCells();
+    }
   } else if((e.ctrlKey||e.metaKey) && key==='z' && !e.shiftKey){
     e.preventDefault(); undo();
   } else if((e.ctrlKey||e.metaKey) && (key==='y' || (key==='z' && e.shiftKey))){
@@ -2130,6 +2142,13 @@ function renderTable(){
         </td>
       </tr>`;
   }).join('');
+  // v48: tag every data cell with its column key (post-render, index-aligned with `cols`) so the
+  // cell-range-selection feature below can find/highlight cells without touching colTdHtml()'s branches.
+  Array.from(body.children).forEach(tr=>{
+    const tds = tr.children;
+    for(let i=0;i<cols.length;i++){ if(tds[i]) tds[i].dataset.col = cols[i]; }
+  });
+  renderCellSelectionHighlight();
 }
 
 /* ---------- column drag-to-reorder ---------- */
@@ -3195,6 +3214,122 @@ document.getElementById('ganttPanel').addEventListener('scroll', function(){
   document.getElementById('wbsPanel').scrollTop = this.scrollTop;
   syncing=false;
 });
+
+/* ---------- v48: Excel-like cell-range selection + copy-to-clipboard ----------
+   Click a data cell in the WBS table to anchor a single-cell selection; shift+click extends the
+   selection to a rectangular range (by row order × column order, same as Excel/MS-Project). Ctrl+C
+   then copies the selected range as a tab-separated block so it pastes cleanly into Excel. This is
+   independent of the three existing selection concepts (selectedId row-click, clipboardId cut/paste,
+   multiSelectIds Ctrl/Cmd+click chain-linking) and uses different triggers so none of them conflict. */
+function cellRangeBounds(){
+  if(!cellSelAnchor || !cellSelEnd) return null;
+  const critOnly = document.getElementById('critOnly').checked;
+  const rows = visibleRows().filter(t=>!(critOnly && !t.critical));
+  const cols = visibleColumns();
+  const rowIds = rows.map(t=>t.id);
+  const r1 = rowIds.indexOf(cellSelAnchor.rowId), r2 = rowIds.indexOf(cellSelEnd.rowId);
+  const c1 = cols.indexOf(cellSelAnchor.col), c2 = cols.indexOf(cellSelEnd.col);
+  if(r1<0||r2<0||c1<0||c2<0) return null;
+  return {
+    rowIds: rowIds.slice(Math.min(r1,r2), Math.max(r1,r2)+1),
+    cols: cols.slice(Math.min(c1,c2), Math.max(c1,c2)+1)
+  };
+}
+function renderCellSelectionHighlight(){
+  const body = document.getElementById('wbsBody');
+  if(!body) return;
+  body.querySelectorAll('td.cell-selected').forEach(td=>td.classList.remove('cell-selected'));
+  const b = cellRangeBounds();
+  if(!b) return;
+  const rowIdSet = new Set(b.rowIds);
+  const colSet = new Set(b.cols);
+  body.querySelectorAll('tr[data-id]').forEach(tr=>{
+    if(!rowIdSet.has(tr.dataset.id)) return;
+    Array.from(tr.children).forEach(td=>{
+      if(td.dataset.col && colSet.has(td.dataset.col)) td.classList.add('cell-selected');
+    });
+  });
+}
+document.getElementById('wbsBody').addEventListener('mousedown', function(e){
+  const td = e.target.closest('td[data-col]');
+  if(!td) return;
+  const tr = td.closest('tr[data-id]');
+  if(!tr) return;
+  const cell = { rowId: tr.dataset.id, col: td.dataset.col };
+  if(e.shiftKey){
+    e.preventDefault(); // stop native text-selection drag and stop a shift-clicked <select> from opening
+    if(!cellSelAnchor) cellSelAnchor = cell;
+    cellSelEnd = cell;
+  } else {
+    cellSelAnchor = cell;
+    cellSelEnd = cell;
+  }
+  renderCellSelectionHighlight();
+});
+// column-key -> human-readable display value for one task, matching what colTdHtml() shows on screen
+// (kept separate from colTdHtml itself so v48 doesn't have to touch its 18 case branches).
+function cellCopyValue(key, t){
+  const isSum = hasKids(t);
+  switch(key){
+    case 'actId': return t.id||'';
+    case 'wbs': return t.wbs||'';
+    case 'name': return t.name||'';
+    case 'resp': return isSum ? '' : (t.responsible||'');
+    case 'start': return t.startDate ? fmtROC(t.startDate) : '';
+    case 'end': return t.endDate ? fmtROC(t.endDate) : '';
+    case 'lateStart': return t.lateStartDate ? fmtROC(t.lateStartDate) : '';
+    case 'lateFinish': return t.lateFinishDate ? fmtROC(t.lateFinishDate) : '';
+    case 'dur': return isSum ? '' : String(t.duration!=null ? t.duration : '');
+    case 'float': return isSum ? '' : String(t.float||0);
+    case 'progress': return String(t.progress!=null ? t.progress : 0);
+    case 'budget': return String(t.budget||0);
+    case 'actual': return String(t.actual||0);
+    case 'diff': return String((t.budget||0)-(t.actual||0));
+    case 'pred': return predRefText(t);
+    case 'succ': return succRefText(t);
+    case 'parentRef': return t.parent==null ? '' : ('#'+t.parent);
+    case 'milestoneFlag': return t.milestone ? '◆' : '';
+    default: return '';
+  }
+}
+function copySelectedCells(){
+  const b = cellRangeBounds();
+  if(!b) return false;
+  const tasksById = {};
+  tasks.forEach(t=>{ tasksById[t.id] = t; });
+  const lines = b.rowIds.map(rowId=>{
+    const t = tasksById[rowId];
+    if(!t) return '';
+    return b.cols.map(col=>cellCopyValue(col, t)).join('\t');
+  });
+  writeClipboardText(lines.join('\n'));
+  flashCellSelectionCopied();
+  return true;
+}
+function writeClipboardText(text){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).catch(()=>legacyCopyFallback(text));
+  } else {
+    legacyCopyFallback(text);
+  }
+}
+function legacyCopyFallback(text){
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try{ document.execCommand('copy'); }catch(err){}
+  document.body.removeChild(ta);
+}
+function flashCellSelectionCopied(){
+  const body = document.getElementById('wbsBody');
+  if(!body) return;
+  const cells = body.querySelectorAll('td.cell-selected');
+  cells.forEach(td=>td.classList.add('cell-copied-flash'));
+  setTimeout(()=>{ cells.forEach(td=>td.classList.remove('cell-copied-flash')); }, 350);
+}
 
 /* ---------- modal: add / edit ---------- */
 function respOptions(){
