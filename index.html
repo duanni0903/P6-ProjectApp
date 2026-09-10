@@ -338,6 +338,9 @@
   .col-panel label{display:flex; align-items:center; gap:7px; padding:4px 2px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap;}
   .export-menu-item{display:block; width:100%; text-align:left; background:none; border:none; padding:7px 8px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap; border-radius:6px; font-family:inherit;}
   .export-menu-item:hover{background:#f1f5f9;}
+  .export-menu-divider{height:1px; background:var(--border); margin:4px 2px;}
+  .export-menu-paper-size{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 8px 6px; font-size:12px; color:var(--text-dim); white-space:nowrap;}
+  .export-menu-paper-size select{font-size:12px; padding:2px 4px; border-radius:5px; border:1px solid var(--border-dark); font-family:inherit;}
 </style>
 </head>
 <body>
@@ -372,7 +375,15 @@
       <button class="btn" id="exportBtn" onclick="toggleExportMenu(event)" title="把目前的任務清單匯出成檔案">⬇ 匯出</button>
       <div class="col-panel" id="exportMenu" onclick="event.stopPropagation()">
         <button type="button" class="export-menu-item" onclick="exportToExcel()">📊 匯出 Excel（.xls）</button>
-        <button type="button" class="export-menu-item" onclick="exportToPdf()">📄 匯出 PDF</button>
+        <div class="export-menu-divider"></div>
+        <label class="export-menu-paper-size">PDF 紙張大小
+          <select id="exportPaperSize">
+            <option value="A4">A4</option>
+            <option value="A3">A3</option>
+          </select>
+        </label>
+        <button type="button" class="export-menu-item" onclick="exportToPdf()">📄 匯出 PDF（僅任務表）</button>
+        <button type="button" class="export-menu-item" onclick="exportToPdfWithGantt()">📈 匯出 PDF（含甘特圖）</button>
       </div>
     </div>
     <span class="hint" style="margin:0">拖曳欄位標題可調整順序 · 右鍵欄位標題可移動/隱藏</span>
@@ -3411,12 +3422,28 @@ function exportToExcel(){
   triggerFileDownload(`${title}.xls`, 'application/vnd.ms-excel;charset=utf-8;', '﻿'+html);
   closeExportMenu();
 }
+// v51: PDF paper size — reads the 紙張大小 selector in the export menu (A4/A3) and returns the matching
+// @page CSS rule. Landscape by default since both PDF exports are wide (17 possible columns / a Gantt
+// timeline), which fits a landscape page far better than portrait. Chromium's print-to-PDF honors an
+// explicit @page size as the print dialog's starting paper size.
+function exportPaperSizeValue(){
+  const sel = document.getElementById('exportPaperSize');
+  return (sel && sel.value) || 'A4';
+}
+// landscape mm dimensions for each supported paper size (used both for the @page CSS rule and to
+// compute the printable pixel area for the v52 auto-fit-to-one-page scaling below).
+const EXPORT_PAGE_MM = { A4: { w: 297, h: 210 }, A3: { w: 420, h: 297 } };
+const EXPORT_PAGE_MARGIN_MM = 12;
+function exportPageSizeCss(){
+  return `@page{ size: ${exportPaperSizeValue()} landscape; margin: ${EXPORT_PAGE_MARGIN_MM}mm; }`;
+}
 function exportToPdf(){
   const title = exportTitle();
   const win = window.open('', '_blank');
   if(!win){ alert('瀏覽器阻擋了新視窗，請允許本網站的快顯視窗（PDF 匯出／列印）後再試一次'); closeExportMenu(); return; }
   win.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>${escAttr(title)}</title>
 <style>
+  ${exportPageSizeCss()}
   body{font-family:'Microsoft JhengHei', Arial, sans-serif; padding:16px; color:#111;}
   h1{font-size:16px; margin:0 0 12px;}
   table{border-collapse:collapse; width:100%; font-size:11px;}
@@ -3429,6 +3456,129 @@ ${exportTableHtml()}
 </body></html>`);
   win.document.close();
   setTimeout(()=>{ win.focus(); win.print(); }, 300); // opens the browser's native print dialog — user picks "另存為 PDF"
+  closeExportMenu();
+}
+/* ---------- v50/v53: 匯出 PDF（含甘特圖） ----------
+   v53: per user feedback, this no longer prints a separate full-width task table ABOVE a separate Gantt
+   section — it reproduces the app's own split-panel screen layout: the WBS table (using whichever
+   columns are currently visible on screen, via visibleColumns()/COLUMN_META, at their current on-screen
+   widths) directly beside the Gantt chart, one row per visible task, so the two line up exactly like the
+   live #wbsPanel + #ganttWrap do. Same collapse state / 只顯示關鍵路徑 filter / colors / timescale as the
+   live view (not the always-full-tree dump exportTableHtml() uses for the table-only/Excel exports). */
+function exportGanttHtml(){
+  const critOnly = document.getElementById('critOnly').checked;
+  const rows = visibleRows().filter(t=> !(critOnly && !t.critical));
+  const cols = visibleColumns();
+  // v52: a shrunk row-height (was 34px) — the whole with-Gantt export favors a smaller baseline size so
+  // more of it fits on one printed page; the auto-scale script in exportToPdfWithGantt() still shrinks
+  // further on top of this if needed.
+  const TIER_ROW_H = 22;
+  const rowH = 24;
+  const cellFontPx = 9;
+  const headerH = TIER_ROW_H * ganttTimescaleRows.length;
+  const colWidth = k => (COLUMN_META[k] && COLUMN_META[k].width) || 60;
+  const tableWidth = cols.reduce((sum,k)=> sum + colWidth(k), 0);
+  const headerCells = cols.map(k=>{
+    const label = (COLUMN_META[k] && COLUMN_META[k].label) || k;
+    return `<div style="flex:0 0 ${colWidth(k)}px; width:${colWidth(k)}px; box-sizing:border-box; padding:0 5px; overflow:hidden; white-space:nowrap; border-right:1px solid #ccc;">${escAttr(label)}</div>`;
+  }).join('');
+  const bodyRows = rows.map(t=>{
+    const isSum = hasKids(t);
+    const cells = cols.map(k=>{
+      const v = cellCopyValue(k, t);
+      const indent = k==='name' ? (t._depth||0)*10 : 0;
+      return `<div style="flex:0 0 ${colWidth(k)}px; width:${colWidth(k)}px; box-sizing:border-box; padding:0 5px 0 ${5+indent}px; overflow:hidden; white-space:nowrap; border-right:1px solid #eee;">${escAttr(v)}</div>`;
+    }).join('');
+    return `<div style="height:${rowH}px; box-sizing:border-box; display:flex; align-items:center; border-bottom:1px solid #eee; ${isSum?'font-weight:bold; background:#f8fafc;':''}">${cells}</div>`;
+  }).join('');
+  // Pull out just the <svg>...</svg> itself — #ganttWrap also holds a sibling drag-to-zoom overlay div
+  // (position:absolute in the live page) that would otherwise sit inline and misalign the table.
+  const wrapHtml = document.getElementById('ganttWrap').innerHTML;
+  const svgMatch = wrapHtml.match(/<svg[\s\S]*<\/svg>/);
+  const svgHtml = svgMatch ? svgMatch[0] : wrapHtml;
+  return `<div style="display:flex; align-items:flex-start; font-size:${cellFontPx}px;">
+    <div style="flex:none; width:${tableWidth}px; border-right:1px solid #999;">
+      <div style="height:${headerH}px; box-sizing:border-box; border-bottom:1px solid #999; display:flex; align-items:center; font-weight:bold; background:#e5e7eb;">${headerCells}</div>
+      ${bodyRows}
+    </div>
+    <div style="flex:none;">${svgHtml}</div>
+  </div>`;
+}
+// The Gantt SVG's shapes are styled entirely via CSS classes (.month-band, .bar-track, .arrow-path,
+// ...) defined in the main page's <style>, not inline attributes — copied verbatim here (plus the CSS
+// variables they reference) so a copy of the SVG still renders correctly inside the separate print
+// window's own document, which doesn't inherit the main page's stylesheet.
+const GANTT_EXPORT_CSS = `
+  svg{display:block;}
+  .month-band{fill:#f8fafc;}
+  .month-band.alt{fill:#eef2f7;}
+  .grid-line{stroke:#eef1f5; stroke-width:1;}
+  .today-line{stroke:#2563eb; stroke-width:1.5; stroke-dasharray:3,3;}
+  .bar-track{fill:#f1f5f9;}
+  .bar-outline-crit{stroke:#dc2626; stroke-width:1.6;}
+  .summary-bar-shape{fill:#334155;}
+  .arrow-path{fill:none; stroke:#94a3b8; stroke-width:1.2;}
+  .arrow-path.crit{stroke:#dc2626; stroke-width:1.3;}
+  .axis-text{font-size:10.5px; fill:#64748b; font-family:inherit;}
+  .month-text{font-size:11px; fill:#1e293b; font-weight:700; font-family:inherit;}
+  .bar-label{font-size:10px; fill:#fff; font-family:inherit; pointer-events:none;}
+`;
+function exportToPdfWithGantt(){
+  const title = exportTitle();
+  const paperSize = exportPaperSizeValue();
+  const pageMM = EXPORT_PAGE_MM[paperSize] || EXPORT_PAGE_MM.A4;
+  const win = window.open('', '_blank');
+  if(!win){ alert('瀏覽器阻擋了新視窗，請允許本網站的快顯視窗（PDF 匯出／列印）後再試一次'); closeExportMenu(); return; }
+  // v52: 欄位與字體整體縮小（baseline font-size/padding，見下方 <style>），並在文件最後加一段自動縮放
+  // script —量測 #printRoot 的實際大小，若超出紙張可印範圍，就用 CSS transform:scale() 整份縮小到剛好
+  //塞進一頁。transform 本身不會改變元素在版面配置裡佔的空間（只改變畫面上的視覺大小），所以額外用一個
+  // 依縮放後尺寸明確設定 width/height 的外層 wrapper 包住它，讓瀏覽器的分頁機制也照著縮小後的大小排版，
+  // 才能真正只印出一頁，而不是視覺上變小但還是印成兩頁。
+  win.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>${escAttr(title)}</title>
+<style>
+  ${exportPageSizeCss()}
+  body{font-family:'Microsoft JhengHei', Arial, sans-serif; padding:10px; color:#111;}
+  h1{font-size:13px; margin:0 0 6px;}
+  ${GANTT_EXPORT_CSS}
+</style>
+</head><body>
+<div id="printRoot" style="width:max-content;">
+<h1>${escAttr(title)}</h1>
+${exportGanttHtml()}
+</div>
+<script>
+(function(){
+  var root = document.getElementById('printRoot');
+  var mmToPx = 96 / 25.4;
+  // 1% safety margin: the on-screen measurement here and the browser's actual print-time rendering
+  // can differ by a sub-pixel amount (font/subpixel rounding), and Math.ceil()-ing the wrapper size
+  // below always rounds UP to the nearest whole px — so sizing exactly to the printable area leaves
+  // zero headroom and a fraction-of-a-pixel overshoot is enough to spill onto a second page. A small
+  // buffer keeps the scaled content safely inside the page even after that rounding.
+  // body{padding:10px} above sits INSIDE the @page content area, so it eats into the usable space too —
+  // not just the @page margin — or the wrapper can end up a bit taller/wider than what's actually left
+  // on the page even at scale 1.
+  var bodyPad = 10;
+  var targetW = ((${pageMM.w} - ${EXPORT_PAGE_MARGIN_MM * 2}) * mmToPx - bodyPad * 2) * 0.99;
+  var targetH = ((${pageMM.h} - ${EXPORT_PAGE_MARGIN_MM * 2}) * mmToPx - bodyPad * 2) * 0.99;
+  var w = root.scrollWidth, h = root.scrollHeight;
+  var scale = Math.min(1, targetW / w, targetH / h);
+  if(scale < 1){
+    root.style.width = w + 'px';
+    root.style.transformOrigin = 'top left';
+    root.style.transform = 'scale(' + scale + ')';
+    var wrap = document.createElement('div');
+    wrap.style.width = Math.floor(w * scale) + 'px';
+    wrap.style.height = Math.floor(h * scale) + 'px';
+    wrap.style.overflow = 'hidden';
+    root.parentNode.insertBefore(wrap, root);
+    wrap.appendChild(root);
+  }
+})();
+<\/script>
+</body></html>`);
+  win.document.close();
+  setTimeout(()=>{ win.focus(); win.print(); }, 300);
   closeExportMenu();
 }
 function toggleExportMenu(e){
