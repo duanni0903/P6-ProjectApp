@@ -3437,6 +3437,15 @@ const EXPORT_PAGE_MARGIN_MM = 12;
 function exportPageSizeCss(){
   return `@page{ size: ${exportPaperSizeValue()} landscape; margin: ${EXPORT_PAGE_MARGIN_MM}mm; }`;
 }
+// v55: the PDF popup used to call window.print() itself on a 300ms timeout — per user feedback, it
+// should let them review the preview first and trigger printing themselves. This floating button does
+// that; @media print hides it so it never shows up in the actual printed/PDF output.
+const EXPORT_PRINT_FAB_CSS = `
+  .print-fab{position:fixed; top:14px; right:14px; z-index:9999; background:#2563eb; color:#fff; border:none; border-radius:8px; padding:10px 18px; font-size:14px; font-weight:600; font-family:inherit; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.25);}
+  .print-fab:hover{background:#1d4ed8;}
+  @media print{ .print-fab{display:none !important;} }
+`;
+const EXPORT_PRINT_FAB_HTML = `<button type="button" class="print-fab" onclick="window.print()">🖨️ 確認無誤，列印／另存為 PDF</button>`;
 function exportToPdf(){
   const title = exportTitle();
   const win = window.open('', '_blank');
@@ -3449,13 +3458,17 @@ function exportToPdf(){
   table{border-collapse:collapse; width:100%; font-size:11px;}
   th, td{border:1px solid #999; padding:4px 6px; text-align:left;}
   th{background:#e5e7eb;}
+  ${EXPORT_PRINT_FAB_CSS}
 </style>
 </head><body>
+${EXPORT_PRINT_FAB_HTML}
 <h1>${escAttr(title)}</h1>
 ${exportTableHtml()}
 </body></html>`);
   win.document.close();
-  setTimeout(()=>{ win.focus(); win.print(); }, 300); // opens the browser's native print dialog — user picks "另存為 PDF"
+  win.focus();
+  // v55: no longer auto-opens the print dialog — the user asked to review the preview first, then
+  // trigger 列印／另存為 PDF themselves via the button above (see EXPORT_PRINT_FAB_HTML).
   closeExportMenu();
 }
 /* ---------- v50/v53: 匯出 PDF（含甘特圖） ----------
@@ -3544,8 +3557,10 @@ function exportToPdfWithGantt(){
   body{font-family:'Microsoft JhengHei', Arial, sans-serif; padding:10px; color:#111;}
   h1{font-size:13px; margin:0 0 6px;}
   ${GANTT_EXPORT_CSS}
+  ${EXPORT_PRINT_FAB_CSS}
 </style>
 </head><body>
+${EXPORT_PRINT_FAB_HTML}
 <div id="printRoot" style="width:max-content;">
 <h1>${escAttr(title)}</h1>
 ${exportGanttHtml()}
@@ -3582,7 +3597,9 @@ ${exportGanttHtml()}
 <\/script>
 </body></html>`);
   win.document.close();
-  setTimeout(()=>{ win.focus(); win.print(); }, 300);
+  win.focus();
+  // v55: no longer auto-opens the print dialog — the user asked to review the preview (and the
+  // auto-fit-to-one-page scaling) first, then trigger 列印／另存為 PDF themselves via the button above.
   closeExportMenu();
 }
 function toggleExportMenu(e){
