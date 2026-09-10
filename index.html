@@ -336,6 +336,8 @@
     border-radius:10px; box-shadow:0 10px 30px rgba(15,23,42,.18); padding:8px 10px; z-index:60; min-width:150px;
   }
   .col-panel label{display:flex; align-items:center; gap:7px; padding:4px 2px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap;}
+  .export-menu-item{display:block; width:100%; text-align:left; background:none; border:none; padding:7px 8px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap; border-radius:6px; font-family:inherit;}
+  .export-menu-item:hover{background:#f1f5f9;}
 </style>
 </head>
 <body>
@@ -365,6 +367,13 @@
     <div class="col-panel-wrap">
       <button class="btn" id="colPanelBtn" onclick="toggleColPanel(event)" title="勾選要顯示的欄位">☰ 欄位顯示</button>
       <div class="col-panel" id="colPanel" onclick="event.stopPropagation()"></div>
+    </div>
+    <div class="col-panel-wrap">
+      <button class="btn" id="exportBtn" onclick="toggleExportMenu(event)" title="把目前的任務清單匯出成檔案">⬇ 匯出</button>
+      <div class="col-panel" id="exportMenu" onclick="event.stopPropagation()">
+        <button type="button" class="export-menu-item" onclick="exportToExcel()">📊 匯出 Excel（.xls）</button>
+        <button type="button" class="export-menu-item" onclick="exportToPdf()">📄 匯出 PDF</button>
+      </div>
     </div>
     <span class="hint" style="margin:0">拖曳欄位標題可調整順序 · 右鍵欄位標題可移動/隱藏</span>
     <div id="clipboardBar" style="display:none; align-items:center; gap:6px;">
@@ -1863,7 +1872,7 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'name': {
       const chainIdx = multiSelectIds.indexOf(t.id);
       const chainBadge = chainIdx>=0 ? `<span class="chain-badge" title="Ctrl+點擊選取順序 ${chainIdx+1}">${chainIdx+1}</span>` : '';
-      const nameText = `<span class="task-name-text" onclick="startNameEdit(event, '${t.id}')" title="點一下可直接改名">${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>`;
+      const nameText = `<span class="task-name-text" ondblclick="startNameEdit(event, '${t.id}')" title="連續點兩下可直接改名">${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>`;
       const nameCell = `<span style="padding-left:${depth*15}px; display:inline-flex; align-items:center; gap:3px" title="${isSum?'':'前置任務: '+predText(t)}">${arrow}${nameText}</span>`;
       return `<td class="col-name" title="${t.name}">${nameCell}${chainBadge}</td>`;
     }
@@ -3228,11 +3237,18 @@ function cellRangeBounds(){
   const cols = visibleColumns();
   const rowIds = rows.map(t=>t.id);
   const r1 = rowIds.indexOf(cellSelAnchor.rowId), r2 = rowIds.indexOf(cellSelEnd.rowId);
-  const c1 = cols.indexOf(cellSelAnchor.col), c2 = cols.indexOf(cellSelEnd.col);
-  if(r1<0||r2<0||c1<0||c2<0) return null;
+  if(r1<0||r2<0) return null;
+  // A plain click (anchor === end, same row AND same column) selects just that one cell.
+  // A shift+click — even within the same row — selects the FULL rows in range (every column),
+  // not a row-order × column-order rectangle, per user request: 依列直接全選，不要列x欄範圍.
+  if(cellSelAnchor.rowId===cellSelEnd.rowId && cellSelAnchor.col===cellSelEnd.col){
+    const c1 = cols.indexOf(cellSelAnchor.col);
+    if(c1<0) return null;
+    return { rowIds: [cellSelAnchor.rowId], cols: [cellSelAnchor.col] };
+  }
   return {
     rowIds: rowIds.slice(Math.min(r1,r2), Math.max(r1,r2)+1),
-    cols: cols.slice(Math.min(c1,c2), Math.max(c1,c2)+1)
+    cols: cols.slice()
   };
 }
 function renderCellSelectionHighlight(){
@@ -3297,12 +3313,15 @@ function copySelectedCells(){
   if(!b) return false;
   const tasksById = {};
   tasks.forEach(t=>{ tasksById[t.id] = t; });
+  // v49: always lead with a header row of the selected columns' labels, so a paste into Excel keeps
+  // its column headings even when copying a whole block of rows straight out of the WBS table.
+  const headerLine = b.cols.map(col => (COLUMN_META[col] && COLUMN_META[col].label) || col).join('\t');
   const lines = b.rowIds.map(rowId=>{
     const t = tasksById[rowId];
     if(!t) return '';
     return b.cols.map(col=>cellCopyValue(col, t)).join('\t');
   });
-  writeClipboardText(lines.join('\n'));
+  writeClipboardText([headerLine, ...lines].join('\n'));
   flashCellSelectionCopied();
   return true;
 }
@@ -3330,6 +3349,103 @@ function flashCellSelectionCopied(){
   cells.forEach(td=>td.classList.add('cell-copied-flash'));
   setTimeout(()=>{ cells.forEach(td=>td.classList.remove('cell-copied-flash')); }, 350);
 }
+
+/* ---------- v49: export the full task list to Excel (.xls) or PDF ----------
+   Both exports share one plain <table> built from the SAME per-column values used for the v48
+   Ctrl+C copy (cellCopyValue), so what you see is exactly what gets exported — not a DOM scrape.
+   Unlike the on-screen table, the export always includes every task regardless of collapsed state,
+   since "匯出" is expected to produce the complete task list, not just whatever's currently expanded. */
+function exportRowsFlat(){
+  const rows = [];
+  function walk(parentId, depth){
+    let kids = tasks.filter(t=>t.parent===parentId);
+    if(sortColKey && sortDir){
+      kids = kids.slice().sort((a,b)=>{
+        const cmp = compareSortValues(sortValue(sortColKey,a), sortValue(sortColKey,b));
+        return sortDir===2 ? -cmp : cmp;
+      });
+    }
+    kids.forEach(t=>{
+      rows.push({ task: t, depth });
+      if(hasKids(t)) walk(t.id, depth+1); // ignore collapsed[] — export is always the full tree
+    });
+  }
+  walk(null, 0);
+  return rows;
+}
+function exportTitle(){
+  const el = document.getElementById('projectTitle');
+  return (el && el.textContent.trim()) || 'P6任務清單';
+}
+function exportTableHtml(){
+  const cols = visibleColumns();
+  const headerCells = cols.map(k => `<th style="background:#e5e7eb; border:1px solid #999; padding:4px 8px; font-weight:bold; text-align:left;">${escAttr((COLUMN_META[k]&&COLUMN_META[k].label)||k)}</th>`).join('');
+  const bodyRows = exportRowsFlat().map(({task:t, depth})=>{
+    const isSum = hasKids(t);
+    const tds = cols.map(k=>{
+      const v = cellCopyValue(k, t);
+      const indent = k==='name' ? '　'.repeat(depth) : '';
+      return `<td style="border:1px solid #ccc; padding:4px 8px; ${isSum?'font-weight:bold; background:#f8fafc;':''}">${escAttr(indent+v)}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+  return `<table style="border-collapse:collapse; font-family:Arial, 'Microsoft JhengHei', sans-serif; font-size:12px;"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+}
+function triggerFileDownload(filename, mime, content){
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+function exportToExcel(){
+  const title = exportTitle();
+  // The classic dependency-free "table to Excel" trick: an HTML document with the Excel XML
+  // namespaces, saved with a .xls extension — Excel opens it as a real worksheet, no library needed.
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>WBS</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
+<body>${exportTableHtml()}</body></html>`;
+  triggerFileDownload(`${title}.xls`, 'application/vnd.ms-excel;charset=utf-8;', '﻿'+html);
+  closeExportMenu();
+}
+function exportToPdf(){
+  const title = exportTitle();
+  const win = window.open('', '_blank');
+  if(!win){ alert('瀏覽器阻擋了新視窗，請允許本網站的快顯視窗（PDF 匯出／列印）後再試一次'); closeExportMenu(); return; }
+  win.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>${escAttr(title)}</title>
+<style>
+  body{font-family:'Microsoft JhengHei', Arial, sans-serif; padding:16px; color:#111;}
+  h1{font-size:16px; margin:0 0 12px;}
+  table{border-collapse:collapse; width:100%; font-size:11px;}
+  th, td{border:1px solid #999; padding:4px 6px; text-align:left;}
+  th{background:#e5e7eb;}
+</style>
+</head><body>
+<h1>${escAttr(title)}</h1>
+${exportTableHtml()}
+</body></html>`);
+  win.document.close();
+  setTimeout(()=>{ win.focus(); win.print(); }, 300); // opens the browser's native print dialog — user picks "另存為 PDF"
+  closeExportMenu();
+}
+function toggleExportMenu(e){
+  e.stopPropagation();
+  const menu = document.getElementById('exportMenu');
+  menu.style.display = menu.style.display==='block' ? 'none' : 'block';
+}
+function closeExportMenu(){
+  const menu = document.getElementById('exportMenu');
+  if(menu) menu.style.display = 'none';
+}
+document.addEventListener('click', function(e){
+  const menu = document.getElementById('exportMenu');
+  if(menu && menu.style.display==='block' && !e.target.closest('#exportMenu') && !e.target.closest('#exportBtn')){
+    menu.style.display = 'none';
+  }
+});
 
 /* ---------- modal: add / edit ---------- */
 function respOptions(){
