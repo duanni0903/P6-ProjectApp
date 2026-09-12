@@ -1489,6 +1489,8 @@ function outdentTask(id){
 /* ---------- click-to-select + Ctrl+X / Ctrl+V move (Project-style cut & paste) ---------- */
 /* ---------- Ctrl/Cmd+click to build an ordered multi-select chain, then right-click to link them ---------- */
 function selectRow(id, e){
+  const _prevSelectedId = selectedId;
+  const _prevMultiIds = multiSelectIds;
   if(e && (e.ctrlKey || e.metaKey)){
     // if nothing's in the chain yet, seed it with whatever was already selected by a plain click —
     // so the flow is "click task 1 normally, then Ctrl+click task 2" without needing Ctrl on task 1 too
@@ -1499,6 +1501,19 @@ function selectRow(id, e){
     multiSelectIds = []; // a plain click starts a fresh single selection
   }
   selectedId = id;
+  // v56: clicking a row that's ALREADY the selection (and whose multi-select chain isn't changing)
+  // is a no-op — skip the re-render. This matters for more than efficiency: a real double-click on
+  // the task name fires this onclick handler for BOTH of its clicks before the dblclick event ever
+  // arrives. The 2nd click's own re-render used to blow away and rebuild the whole <tbody> in the
+  // instant between that click's dispatch and the dblclick's — so by the time startNameEdit() ran,
+  // e.currentTarget was a detached copy of the <span> (closest('td.col-name') still resolves within
+  // the orphaned subtree, so no error was thrown — the edit box was just built on an invisible node
+  // that was never in the document). Not re-rendering when nothing actually changed keeps the row
+  // (and the dblclick's target) alive across both clicks, so the edit input appears as expected.
+  const _changed = selectedId!==_prevSelectedId
+    || multiSelectIds.length!==_prevMultiIds.length
+    || multiSelectIds.some((v,i)=>v!==_prevMultiIds[i]);
+  if(!_changed) return;
   renderTable();
   updateClipboardBar();
   updateChainBar();
