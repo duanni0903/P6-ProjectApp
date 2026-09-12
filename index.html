@@ -557,6 +557,9 @@
 </div>
 
 <div class="ctx-menu" id="ctxMenu" onclick="event.stopPropagation()">
+  <button onclick="ctxExpandAll()">▼ 展開全部子任務</button>
+  <button onclick="ctxCollapseAll()">▶ 摺疊全部子任務</button>
+  <div class="ctx-sep"></div>
   <button onclick="ctxEdit()">✎ 編輯任務</button>
   <button onclick="ctxAddSibling()">＋ 新增同層任務</button>
   <button onclick="ctxAddChild()">＋ 新增子任務</button>
@@ -3998,6 +4001,12 @@ function ctxCut(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return;
 function ctxPaste(){ const id=ctxTargetId; hideContextMenu(); if(id==null) return; selectedId=id; pasteTask(); }
 function ctxDelete(){ const id=ctxTargetId; hideContextMenu(); if(id!=null) deleteTaskById(id); }
 function ctxChainLink(){ hideContextMenu(); chainLinkTasks(); }
+// v57: right-click → 展開全部子任務／摺疊全部子任務 — a one-click way to open or close every summary
+// row's children at once, instead of clicking each ▼/▶ arrow individually. Applies to the WHOLE task
+// list (not just the right-clicked row's branch), same scope as toggleCollapse's per-row toggle but
+// covering every summary task in one go. Pure view state (like toggleCollapse), so no undo snapshot.
+function ctxExpandAll(){ hideContextMenu(); collapsed = {}; renderTable(); renderGantt(); }
+function ctxCollapseAll(){ hideContextMenu(); tasks.forEach(t => { if(hasKids(t)) collapsed[t.id] = true; }); renderTable(); renderGantt(); }
 
 /* ---------- main render ---------- */
 function render(){
