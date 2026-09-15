@@ -366,7 +366,7 @@
     <button class="btn" onclick="openOwnerMgmt()" title="建立/編輯負責人名冊，之後在任務裡就能直接從清單挑選指派">👥 負責人管理</button>
     <button class="btn" id="undoBtn" onclick="undo()" title="復原上一步變更（Ctrl+Z）" disabled>↶ 上一步</button>
     <button class="btn" id="redoBtn" onclick="redo()" title="重做（Ctrl+Shift+Z）" disabled>↷ 下一步</button>
-    <label class="toggle"><input type="checkbox" id="critOnly" onchange="render()"> 只顯示關鍵路徑</label>
+    <label class="toggle"><input type="checkbox" id="critOnly" onchange="saveUiState(); render()"> 只顯示關鍵路徑</label>
     <div class="col-panel-wrap">
       <button class="btn" id="colPanelBtn" onclick="toggleColPanel(event)" title="勾選要顯示的欄位">☰ 欄位顯示</button>
       <div class="col-panel" id="colPanel" onclick="event.stopPropagation()"></div>
@@ -1263,7 +1263,13 @@ async function loadFromSheet(){
         const n = Number(t.id);
         return (Number.isFinite(n) && String(n)===t.id) ? Math.max(m,n) : m;
       }, 0);
-      collapsed = {}; selectedId = null; clipboardId = null; multiSelectIds = [];
+      // v58: collapsed is no longer reset here — it's a per-browser display preference restored by
+      // loadUiState() at startup and persisted across syncs (see saveUiState()), same as calendarMode/
+      // sortColKey/etc below. Task ids are stable across a normal reload of the SAME project, so
+      // keeping it lets a reopened tab look the way the user left it; a stale entry for a task that
+      // no longer exists is harmless (visibleRows() only ever consults collapsed[id] for ids that are
+      // actually present in the current tasks[]).
+      selectedId = null; clipboardId = null; multiSelectIds = [];
       owners = Array.isArray(data.owners) ? data.owners.map(o=>({name:String(o.name||''), contact:o.contact?String(o.contact):'', dept:o.dept?String(o.dept):''})).filter(o=>o.name) : [];
       setSyncStatus('ok', '已從 Google Sheet 載入');
     } else {
@@ -1387,6 +1393,7 @@ function setEra(e){
   calendarMode = e;
   document.getElementById('eraROC').classList.toggle('active', e==='roc');
   document.getElementById('eraAD').classList.toggle('active', e==='ad');
+  saveUiState();
   render();
 }
 function money(n){ return Number(n||0).toLocaleString('en-US'); }
@@ -1836,6 +1843,7 @@ function sortByColumn(key){
   if(sortColKey !== key){ sortColKey = key; sortDir = 1; }
   else if(sortDir === 1){ sortDir = 2; }
   else { sortColKey = null; sortDir = 0; }
+  saveUiState();
   render();
 }
 
@@ -2147,12 +2155,62 @@ function boardSplitterEnd(){
   document.getElementById('boardSplitter').classList.remove('dragging');
   document.removeEventListener('mousemove', boardSplitterMove);
   document.removeEventListener('mouseup', boardSplitterEnd);
+  saveUiState();
 }
 // double-click the splitter to go back to auto-fit (panel width = sum of visible column widths)
 function boardSplitterReset(){
   wbsPanelWidthOverride = null;
   updateTableWidth();
+  saveUiState();
 }
+
+/* ---------- v58: remember the on-screen "arrangement" across a close/reopen (民國/西元、甘特圖縮放、
+   排序欄位、只顯示關鍵路徑、WBS/甘特 分隔線寬度、任務摺疊/展開狀態) ----------
+   Same rationale and pattern as the column layout persistence above: these are all per-browser DISPLAY
+   preferences, not project data, so they're saved to localStorage rather than round-tripped through
+   the Google Sheet sync. Without this, closing the tab (or just refreshing) silently reset all of these
+   back to their hardcoded defaults even though the task DATA itself had already synced fine — from the
+   user's point of view "I already synced, why does the screen look different again when I reopen it". */
+const UI_STATE_STORAGE_KEY = 'p6lite_ui_state_v1';
+function saveUiState(){
+  try{
+    const critOnlyEl = document.getElementById('critOnly');
+    localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify({
+      calendarMode, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride,
+      critOnly: critOnlyEl ? critOnlyEl.checked : false,
+      collapsed,
+    }));
+  }catch(err){
+    // localStorage can throw (private browsing, storage disabled, quota) — losing the saved
+    // arrangement is a minor inconvenience, not worth surfacing an error to the user over
+    console.warn('無法儲存介面顯示狀態', err);
+  }
+}
+function loadUiState(){
+  try{
+    const raw = localStorage.getItem(UI_STATE_STORAGE_KEY);
+    if(!raw) return;
+    const saved = JSON.parse(raw);
+    if(!saved || typeof saved !== 'object') return;
+    if(saved.calendarMode === 'roc' || saved.calendarMode === 'ad') calendarMode = saved.calendarMode;
+    if(Number.isFinite(saved.ganttPxPerDay)) ganttPxPerDay = Math.min(GANTT_MAX_PX_PER_DAY, Math.max(GANTT_MIN_PX_PER_DAY, saved.ganttPxPerDay));
+    if(typeof saved.sortColKey === 'string' || saved.sortColKey === null) sortColKey = saved.sortColKey;
+    if(saved.sortDir === 0 || saved.sortDir === 1 || saved.sortDir === 2) sortDir = saved.sortDir;
+    if(Number.isFinite(saved.wbsPanelWidthOverride)) wbsPanelWidthOverride = saved.wbsPanelWidthOverride;
+    if(saved.collapsed && typeof saved.collapsed === 'object') collapsed = {...saved.collapsed};
+    // critOnly is a plain checkbox in the toolbar, not a JS variable — restore it directly onto the
+    // DOM element (its checked state is read fresh from the DOM by renderTable()/renderGantt() etc.)
+    const critOnlyEl = document.getElementById('critOnly');
+    if(critOnlyEl && typeof saved.critOnly === 'boolean') critOnlyEl.checked = saved.critOnly;
+    document.getElementById('eraROC').classList.toggle('active', calendarMode==='roc');
+    document.getElementById('eraAD').classList.toggle('active', calendarMode==='ad');
+    syncZoomButtonsActive();
+  }catch(err){
+    console.warn('無法還原介面顯示狀態', err);
+  }
+}
+loadUiState(); // apply before the first render() so there's no flash of the default arrangement
+
 function renderTable(){
   const critOnly = document.getElementById('critOnly').checked;
   const rows = visibleRows();
@@ -2349,7 +2407,7 @@ document.addEventListener('click', function(e){
   }
 });
 
-function toggleCollapse(id){ collapsed[id]=!collapsed[id]; renderTable(); renderGantt(); }
+function toggleCollapse(id){ collapsed[id]=!collapsed[id]; saveUiState(); renderTable(); renderGantt(); }
 
 /* ---------- task relationship (predecessor / successor) detail panel ---------- */
 const REL_TYPE_LABEL = {FS:'完成→開始', SS:'開始→開始', FF:'完成→完成', SF:'開始→完成'};
@@ -2596,6 +2654,7 @@ function setZoom(z){
   zoom = z;
   ganttPxPerDay = GANTT_ZOOM_PRESETS[z];
   syncZoomButtonsActive();
+  saveUiState();
   renderGantt();
 }
 // A button reads as "active" only when ganttPxPerDay exactly matches its preset — once the user has
@@ -2639,6 +2698,7 @@ function ganttZoomMove(e){
 function ganttZoomEnd(){
   ganttZoomDragging = false;
   syncZoomButtonsActive();
+  saveUiState();
   renderGantt();
   document.removeEventListener('mousemove', ganttZoomMove);
   document.removeEventListener('mouseup', ganttZoomEnd);
@@ -4005,8 +4065,8 @@ function ctxChainLink(){ hideContextMenu(); chainLinkTasks(); }
 // row's children at once, instead of clicking each ▼/▶ arrow individually. Applies to the WHOLE task
 // list (not just the right-clicked row's branch), same scope as toggleCollapse's per-row toggle but
 // covering every summary task in one go. Pure view state (like toggleCollapse), so no undo snapshot.
-function ctxExpandAll(){ hideContextMenu(); collapsed = {}; renderTable(); renderGantt(); }
-function ctxCollapseAll(){ hideContextMenu(); tasks.forEach(t => { if(hasKids(t)) collapsed[t.id] = true; }); renderTable(); renderGantt(); }
+function ctxExpandAll(){ hideContextMenu(); collapsed = {}; saveUiState(); renderTable(); renderGantt(); }
+function ctxCollapseAll(){ hideContextMenu(); tasks.forEach(t => { if(hasKids(t)) collapsed[t.id] = true; }); saveUiState(); renderTable(); renderGantt(); }
 
 /* ---------- main render ---------- */
 function render(){
