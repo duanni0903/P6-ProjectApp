@@ -384,6 +384,15 @@
         </label>
         <button type="button" class="export-menu-item" onclick="exportToPdf()">📄 匯出 PDF（僅任務表）</button>
         <button type="button" class="export-menu-item" onclick="exportToPdfWithGantt()">📈 匯出 PDF（含甘特圖）</button>
+        <div class="export-menu-divider"></div>
+        <label class="export-menu-paper-size">里程碑圖樣式
+          <select id="msStyleSelect" title="A：水平時間軸／B：甘特圖風格／C：垂直清單">
+            <option value="A">A 水平時間軸</option>
+            <option value="B">B 甘特圖風格</option>
+            <option value="C">C 垂直清單</option>
+          </select>
+        </label>
+        <button type="button" class="export-menu-item" onclick="exportMilestoneTimeline()" title="只列出勾選「設為里程碑」的任務，固定以 A3 橫向匯出">🏁 匯出里程碑時程圖（A3）</button>
       </div>
     </div>
     <span class="hint" style="margin:0">拖曳欄位標題可調整順序 · 右鍵欄位標題可移動/隱藏</span>
@@ -3680,6 +3689,250 @@ ${exportGanttHtml()}
   // auto-fit-to-one-page scaling) first, then trigger 列印／另存為 PDF themselves via the button above.
   closeExportMenu();
 }
+
+/* ---------- v59: 匯出「純粹里程碑時程圖」(A3) ----------
+   A standalone, milestone-only view for hand-off/簽呈 use — only tasks with milestone===true, no
+   summary rows and no ordinary work items, in one of three layouts the user picked between after
+   seeing side-by-side mockups: A) a single horizontal timeline banner, B) a Gantt-style month axis
+   with one row per milestone (no bars, just diamonds), C) a two-column vertical list. All three share
+   the same header/legend/status-color logic below and are always exported at A3 landscape (this is
+   the one export the user explicitly asked for as "A3圖", independent of the shared 紙張大小 selector
+   used by the other two PDF exports) — same window.open()+auto-fit-to-one-page pattern as
+   exportToPdfWithGantt() above. */
+function getMilestoneTasks(){
+  return tasks.filter(t=>t.milestone && t.startDate).slice().sort((a,b)=>a.startDate-b.startDate);
+}
+// done (progress 100) > overdue (start date already passed) > on the critical path > has some
+// progress logged > otherwise not started yet. Overdue/critical both read as "needs attention" (red)
+// since a milestone has no partial-bar to show, unlike an ordinary task.
+function msStatusOf(t){
+  if(t.progress>=100) return {key:'done', label:'已完成'};
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  if(t.startDate && t.startDate.getTime() < todayStart.getTime()) return {key:'late', label:'已逾期'};
+  if(t.critical) return {key:'late', label:'要徑關鍵'};
+  if(t.progress>0) return {key:'wip', label:'進行中'};
+  return {key:'todo', label:'未開始'};
+}
+const MS_STATUS_COLOR = { done:'#16a34a', late:'#dc2626', wip:'#2563eb', todo:'#94a3b8' };
+// Inset 2%-98% (not a full 0%-100%) so a milestone that lands exactly on the project start/end date —
+// very common ("開工典禮"/"驗收啟用") — doesn't center its diamond/label right on the page edge and get
+// half-clipped; ticks use the same mapping so the grid still lines up with the items using it.
+function msPct(d, start, end){
+  const span = end.getTime()-start.getTime();
+  const raw = span<=0 ? 0 : Math.max(0, Math.min(1, (d.getTime()-start.getTime())/span));
+  return 2 + raw*96;
+}
+function msMonthTicks(start, end){
+  const ticks = [];
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  let guard = 0;
+  while(cursor <= end && guard++ < 60){
+    ticks.push({ pct: msPct(cursor, start, end), label: (cursor.getMonth()+1)+'月' });
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
+  }
+  return ticks;
+}
+function msRange(){
+  const s = getStats();
+  return { start: PROJECT_START, end: s.endDate };
+}
+function msHeaderHtml(subtitle){
+  const title = exportTitle();
+  const r = msRange();
+  return `<div class="ms-hdr">
+    <div>
+      <h1>${escAttr(title)}　里程碑時程圖</h1>
+      <div class="ms-hdr-sub">${escAttr(subtitle)}</div>
+    </div>
+    <div class="ms-hdr-meta">專案期間　${escAttr(fmtDate(r.start))} － ${escAttr(fmtDate(r.end))}<br>匯出日期　${escAttr(fmtDate(new Date()))}</div>
+  </div>`;
+}
+function msLegendHtml(extra){
+  return `<div class="ms-legend">
+    <span><i style="background:${MS_STATUS_COLOR.done}"></i>已完成</span>
+    <span><i style="background:${MS_STATUS_COLOR.wip}"></i>進行中／未開始</span>
+    <span><i style="background:${MS_STATUS_COLOR.late}"></i>已逾期／要徑關鍵</span>
+    ${extra?`<span class="ms-legend-note">${escAttr(extra)}</span>`:''}
+  </div>`;
+}
+function msEmptyHtml(){
+  return `<div class="ms-empty">目前沒有任何里程碑任務 — 請先在任務的「編輯」視窗勾選「設為里程碑」</div>`;
+}
+const MS_STYLE_CSS = `
+  /* margin-top clears the fixed 列印/另存為PDF button (EXPORT_PRINT_FAB_CSS, top:14px, ~40px tall) —
+     this export is the first one whose header has a right-aligned meta block up near the top, which
+     would otherwise sit directly under the fixed button and get visually clipped by it. */
+  .ms-hdr{display:flex; justify-content:space-between; align-items:flex-end; border-bottom:3px solid #1e293b; padding-bottom:16px; margin:46px 0 8px;}
+  .ms-hdr h1{font-size:26px; margin:0; font-weight:800; letter-spacing:.5px; color:#1e293b;}
+  .ms-hdr-sub{font-size:13px; color:#64748b; margin-top:4px;}
+  .ms-hdr-meta{text-align:right; font-size:12px; color:#64748b; line-height:1.8; white-space:nowrap;}
+  .ms-legend{display:flex; gap:24px; font-size:12px; color:#64748b; border-top:1px solid #e2e8f0; padding-top:12px; margin-top:18px;}
+  .ms-legend span{display:inline-flex; align-items:center; gap:6px;}
+  .ms-legend i{width:11px; height:11px; display:inline-block; border-radius:2px;}
+  .ms-legend-note{margin-left:auto; color:#94a3b8;}
+  .ms-empty{padding:60px 20px; text-align:center; color:#94a3b8; font-size:14px;}
+  /* style A: horizontal banner */
+  .msA-wrap{position:relative; margin-top:150px; height:560px;}
+  .msA-axis{position:absolute; left:10px; right:10px; top:280px; height:4px; background:#1e293b; border-radius:2px;}
+  .msA-tick{position:absolute; top:280px; width:1px; height:14px; background:#cbd5e1; transform:translateY(-5px);}
+  .msA-tick-label{position:absolute; top:300px; font-size:11px; color:#94a3b8; transform:translateX(-50%);}
+  .msA-item{position:absolute; width:0; text-align:center;}
+  .msA-diamond{width:24px; height:24px; position:absolute; top:267px; transform:translateX(-50%) rotate(45deg); border:3px solid #fff;}
+  .msA-stem{position:absolute; left:0; width:2px; background:#cbd5e1; transform:translateX(-50%);}
+  .msA-item.above .msA-stem{top:190px; height:90px;}
+  .msA-item.below .msA-stem{top:294px; height:90px;}
+  .msA-card{position:absolute; width:170px; transform:translateX(-50%); text-align:center;}
+  .msA-item.above .msA-card{top:96px;}
+  .msA-item.below .msA-card{top:390px;}
+  .msA-date{font-size:12px; font-weight:700;}
+  .msA-name{font-size:14px; font-weight:700; color:#1e293b; margin-top:3px; line-height:1.3;}
+  .msA-status{font-size:10.5px; color:#94a3b8; margin-top:3px;}
+  /* style B: Gantt-style rows */
+  .msB-grid{display:grid; grid-template-columns:64px 200px 1fr; border:1px solid #cbd5e1; border-radius:6px; overflow:hidden; margin-top:20px;}
+  .msB-cell{padding:0 12px; display:flex; align-items:center; border-bottom:1px solid #e2e8f0; font-size:13px;}
+  .msB-head{background:#1e293b; color:#fff; font-weight:700; height:40px; font-size:12.5px;}
+  .msB-row{height:52px;}
+  .msB-row.alt{background:#f8fafc;}
+  .msB-id{justify-content:center; color:#94a3b8; font-size:12px;}
+  .msB-name{font-weight:700;}
+  .msB-pill{font-size:10px; padding:1px 8px; border-radius:9px; margin-left:8px; font-weight:600;}
+  .msB-axis{position:relative; height:100%;}
+  .msB-axis-head{position:relative; height:100%;}
+  .msB-gridline{position:absolute; top:0; bottom:0; width:1px; background:#e2e8f0;}
+  .msB-head .msB-gridline{background:rgba(255,255,255,.25);}
+  .msB-month{position:absolute; top:0; height:100%; display:flex; align-items:center; font-size:11.5px; color:#fff; transform:translateX(4px);}
+  .msB-diamond{position:absolute; top:50%; width:18px; height:18px; transform:translate(-50%,-50%) rotate(45deg); border:2px solid #fff;}
+  /* style C: vertical two-column list */
+  .msC-cols{display:flex; gap:56px; margin-top:24px;}
+  .msC-col{flex:1; position:relative; padding-left:30px;}
+  .msC-col::before{content:''; position:absolute; left:9px; top:8px; bottom:8px; width:3px; background:#cbd5e1; border-radius:2px;}
+  .msC-title{font-size:13px; font-weight:800; color:#64748b; margin:0 0 20px; letter-spacing:1px;}
+  .msC-item{position:relative; padding:0 0 38px 24px; min-height:56px;}
+  .msC-item::before{content:''; position:absolute; left:-30px; top:2px; width:20px; height:20px; border:3px solid #fff; border-radius:50%;}
+  .msC-row1{display:flex; align-items:baseline; gap:10px;}
+  .msC-date{font-size:12.5px; font-weight:700; min-width:78px;}
+  .msC-name{font-size:15.5px; font-weight:700; color:#1e293b;}
+  .msC-pill{display:inline-block; margin-top:5px; font-size:10.5px; padding:1px 9px; border-radius:9px; font-weight:600;}
+  .msC-note{font-size:11.5px; color:#64748b; margin-top:5px;}
+`;
+function msStyleAHtml(list, r){
+  if(!list.length) return msEmptyHtml();
+  const ticks = msMonthTicks(r.start, r.end).map(tk=>
+    `<div class="msA-tick" style="left:${tk.pct}%"></div><div class="msA-tick-label" style="left:${tk.pct}%">${tk.label}</div>`
+  ).join('');
+  const items = list.map((t,i)=>{
+    const st = msStatusOf(t);
+    const c = MS_STATUS_COLOR[st.key];
+    const above = i%2===0;
+    const pct = msPct(t.startDate, r.start, r.end);
+    return `<div class="msA-item ${above?'above':'below'}" style="left:${pct}%">
+      <div class="msA-stem"></div>
+      <div class="msA-diamond" style="left:0; background:${c}; box-shadow:0 0 0 2px ${c};"></div>
+      <div class="msA-card"><div class="msA-date" style="color:${c}">${escAttr(fmtROC(t.startDate))}</div><div class="msA-name">${escAttr(t.name)}</div><div class="msA-status">${escAttr(st.label)}</div></div>
+    </div>`;
+  }).join('');
+  return `<div class="msA-wrap"><div class="msA-axis"></div>${ticks}${items}</div>`;
+}
+function msStyleBHtml(list, r){
+  if(!list.length) return msEmptyHtml();
+  // gridlines are generated from the REAL month boundaries (same msPct/msMonthTicks used by the
+  // diamonds below), not a fixed evenly-spaced grid — a project isn't always exactly 7 months long,
+  // so a hardcoded column width would drift out of sync with the actual month labels.
+  const ticksArr = msMonthTicks(r.start, r.end);
+  const gridlines = ticksArr.map(tk=>`<div class="msB-gridline" style="left:${tk.pct}%"></div>`).join('');
+  const headTicks = ticksArr.map(tk=>`<div class="msB-month" style="left:${tk.pct}%">${tk.label}</div>`).join('');
+  const rows = list.map((t,i)=>{
+    const st = msStatusOf(t);
+    const c = MS_STATUS_COLOR[st.key];
+    const pct = msPct(t.startDate, r.start, r.end);
+    return `
+      <div class="msB-cell msB-row ${i%2?'alt':''} msB-id">M${i+1}</div>
+      <div class="msB-cell msB-row ${i%2?'alt':''} msB-name">${escAttr(t.name)}<span class="msB-pill" style="background:${c}22; color:${c}">${escAttr(st.label)}</span></div>
+      <div class="msB-cell msB-row ${i%2?'alt':''} msB-axis">${gridlines}<div class="msB-diamond" style="left:${pct}%; background:${c}; box-shadow:0 0 0 1.5px ${c};"></div></div>`;
+  }).join('');
+  return `<div class="msB-grid">
+    <div class="msB-cell msB-head msB-id">編號</div>
+    <div class="msB-cell msB-head">里程碑名稱</div>
+    <div class="msB-cell msB-head msB-axis-head">${gridlines}${headTicks}</div>
+    ${rows}
+  </div>`;
+}
+function msStyleCHtml(list){
+  if(!list.length) return msEmptyHtml();
+  const half = Math.ceil(list.length/2);
+  const cols = [list.slice(0,half), list.slice(half)];
+  const colTitles = ['前半期里程碑','後半期里程碑'];
+  const colsHtml = cols.map((col,ci)=>{
+    if(!col.length) return '';
+    const items = col.map(t=>{
+      const st = msStatusOf(t);
+      const c = MS_STATUS_COLOR[st.key];
+      const note = t.responsible ? `<div class="msC-note">負責人：${escAttr(t.responsible)}</div>` : '';
+      return `<div class="msC-item" style="--dot:${c}">
+        <div class="msC-row1"><span class="msC-date" style="color:${c}">${escAttr(fmtROC(t.startDate))}</span><span class="msC-name">${escAttr(t.name)}</span></div>
+        <div class="msC-pill" style="background:${c}22; color:${c}">${escAttr(st.label)}</div>
+        ${note}
+      </div>`;
+    }).join('');
+    return `<div class="msC-col"><div class="msC-title">${escAttr(colTitles[ci])}</div>${items}</div>`;
+  }).join('');
+  // the ::before dot color is set per-item via the --dot custom property above, applied here since
+  // the shared stylesheet (MS_STYLE_CSS) can't know each item's status color ahead of time
+  return `<div class="msC-cols">${colsHtml}</div><style>.msC-item::before{background:var(--dot);}</style>`;
+}
+function exportMilestoneTimeline(){
+  const style = (document.getElementById('msStyleSelect')||{}).value || 'A';
+  const title = exportTitle();
+  const win = window.open('', '_blank');
+  if(!win){ alert('瀏覽器阻擋了新視窗，請允許本網站的快顯視窗（PDF 匯出／列印）後再試一次'); closeExportMenu(); return; }
+  const list = getMilestoneTasks();
+  const r = msRange();
+  const styleLabel = { A:'水平時間軸', B:'甘特圖風格', C:'垂直清單' }[style];
+  const bodyHtml = style==='A' ? msStyleAHtml(list, r) : style==='B' ? msStyleBHtml(list, r) : msStyleCHtml(list);
+  // always A3 landscape — this is the one export the user asked for specifically as "A3圖"
+  const pageMM = EXPORT_PAGE_MM.A3;
+  win.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>${escAttr(title)} - 里程碑時程圖</title>
+<style>
+  @page{ size: A3 landscape; margin: ${EXPORT_PAGE_MARGIN_MM}mm; }
+  body{font-family:'Microsoft JhengHei', Arial, sans-serif; padding:10px; color:#111;}
+  ${MS_STYLE_CSS}
+  ${EXPORT_PRINT_FAB_CSS}
+</style>
+</head><body>
+${EXPORT_PRINT_FAB_HTML}
+<div id="printRoot" style="width:1500px;">
+${msHeaderHtml('里程碑時程圖 ・ ' + styleLabel)}
+${bodyHtml}
+${msLegendHtml(list.length + ' 個里程碑')}
+</div>
+<script>
+(function(){
+  var root = document.getElementById('printRoot');
+  var mmToPx = 96 / 25.4;
+  var bodyPad = 10;
+  var targetW = ((${pageMM.w} - ${EXPORT_PAGE_MARGIN_MM * 2}) * mmToPx - bodyPad * 2) * 0.99;
+  var targetH = ((${pageMM.h} - ${EXPORT_PAGE_MARGIN_MM * 2}) * mmToPx - bodyPad * 2) * 0.99;
+  var w = root.scrollWidth, h = root.scrollHeight;
+  var scale = Math.min(1, targetW / w, targetH / h);
+  if(scale < 1){
+    root.style.width = w + 'px';
+    root.style.transformOrigin = 'top left';
+    root.style.transform = 'scale(' + scale + ')';
+    var wrap = document.createElement('div');
+    wrap.style.width = Math.floor(w * scale) + 'px';
+    wrap.style.height = Math.floor(h * scale) + 'px';
+    wrap.style.overflow = 'hidden';
+    root.parentNode.insertBefore(wrap, root);
+    wrap.appendChild(root);
+  }
+})();
+<\/script>
+</body></html>`);
+  win.document.close();
+  win.focus();
+  closeExportMenu();
+}
+
 function toggleExportMenu(e){
   e.stopPropagation();
   const menu = document.getElementById('exportMenu');
