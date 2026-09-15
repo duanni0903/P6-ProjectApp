@@ -111,6 +111,8 @@
   .diff-neg{color:var(--danger);}
   .diff-pos{color:var(--success);}
   .row-actions{white-space:nowrap; display:flex; align-items:center; gap:4px;}
+  .row-hide-cell{text-align:center; padding:0 !important;}
+  .row-hide-cell input[type="checkbox"]{cursor:pointer; vertical-align:middle;}
   .icon-btn{border:none; background:transparent; cursor:pointer; color:var(--text-faint); font-size:13px; padding:6px 7px; border-radius:6px; vertical-align:middle; display:inline-flex; align-items:center; justify-content:center;}
   .icon-btn svg{display:block;}
   .icon-btn:hover{background:var(--border); color:var(--text);}
@@ -336,6 +338,8 @@
     border-radius:10px; box-shadow:0 10px 30px rgba(15,23,42,.18); padding:8px 10px; z-index:60; min-width:150px;
   }
   .col-panel label{display:flex; align-items:center; gap:7px; padding:4px 2px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap;}
+  #rowPanel{max-height:320px; overflow-y:auto; max-width:280px;}
+  .row-panel-empty{font-size:12.5px; color:var(--text-faint); padding:4px 2px; white-space:nowrap;}
   .export-menu-item{display:block; width:100%; text-align:left; background:none; border:none; padding:7px 8px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap; border-radius:6px; font-family:inherit;}
   .export-menu-item:hover{background:#f1f5f9;}
   .export-menu-divider{height:1px; background:var(--border); margin:4px 2px;}
@@ -370,6 +374,10 @@
     <div class="col-panel-wrap">
       <button class="btn" id="colPanelBtn" onclick="toggleColPanel(event)" title="勾選要顯示的欄位">☰ 欄位顯示</button>
       <div class="col-panel" id="colPanel" onclick="event.stopPropagation()"></div>
+    </div>
+    <div class="col-panel-wrap">
+      <button class="btn" id="rowPanelBtn" onclick="toggleRowPanel(event)" title="管理已隱藏的任務列">🙈 列顯示</button>
+      <div class="col-panel" id="rowPanel" onclick="event.stopPropagation()"></div>
     </div>
     <div class="col-panel-wrap">
       <button class="btn" id="exportBtn" onclick="toggleExportMenu(event)" title="把目前的任務清單匯出成檔案">⬇ 匯出</button>
@@ -672,7 +680,7 @@
       not recommended once the page is public).
    3. Until SHEET_API_URL is filled in, the page runs entirely offline on the built-in
       sample data below — nothing is lost, it just won't sync anywhere. */
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwaDvA-PAO0eTBNTv-1vkfPPnQu1LWCB4awcFYVcqgStAS3P6hVzM4Rkj34qlbxSwtH/exec'; // e.g. https://script.google.com/macros/s/AKfycb.../exec
+const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwaDvA-PAO0eTBNTv-1vkfPPnQu1LWCB4awcFYVcqgStAS3P6hVzM4Rkj34qlbxSwtH/exec';
 const API_TOKEN = '123456789';
 const SHEET_CONFIGURED = !!SHEET_API_URL && SHEET_API_URL.indexOf('PASTE_') !== 0;
 
@@ -979,6 +987,12 @@ function ganttFitLabel(text, cellWidthPx, baseFontPx){
   return { show:true, fontPx: Math.round(Math.min(fitFontPx, baseFontPx)*10)/10 };
 }
 let collapsed = {}; // summaryId -> bool
+// v60: id -> true for a task EXPLICITLY hidden via the row checkbox (distinct from collapsed{} above —
+// collapse only folds a summary's children in the on-screen tree/Gantt, but the always-full-tree
+// Excel/PDF-table exports deliberately ignore it; a hidden row removes the row itself, cascades to
+// every descendant, and — per the user's request — is honored by EVERY export, table exports included.
+let hiddenIds = {};
+function isExplicitlyHidden(id){ return !!hiddenIds[id]; }
 let editingId = null;
 let selectedId = null;  // currently clicked/selected task row
 let clipboardId = null; // task cut with Ctrl+X, waiting to be pasted
@@ -1316,6 +1330,7 @@ const COLUMN_META = {
   milestoneFlag: {label:'里程碑', width:56},
 };
 const ACTIONS_COL_WIDTH = 126;
+const HIDE_COL_WIDTH = 30; // v60: fixed leading checkbox column for hiding a row — not part of COLUMN_META/columnOrder, same reason ACTIONS_COL_WIDTH above isn't: it's a structural control column, not a data column, so it's never draggable/reorderable/hideable itself.
 let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden interleaved
 // parentRef / milestoneFlag are already visible another way (tree indentation / ◆ icon on the name),
 // so they start hidden to avoid clutter — everything else backend-side is shown by default.
@@ -1868,6 +1883,7 @@ function visibleRows(){
       });
     }
     kids.forEach(t=>{
+      if(hiddenIds[t.id]) return; // v60: hidden — skip the row itself AND everything under it
       t._depth = depth;
       rows.push(t);
       if(hasKids(t) && !collapsed[t.id]) walk(t.id, depth+1);
@@ -2115,7 +2131,7 @@ function quickAddTask(presetParent){
 function renderTableHeader(){
   const cols = visibleColumns();
   const headRow = document.getElementById('wbsHeadRow');
-  headRow.innerHTML = cols.map(k=>{
+  headRow.innerHTML = `<th style="width:${HIDE_COL_WIDTH}px" title="勾選以隱藏此列（連同其下子任務）"></th>` + cols.map(k=>{
     const m = COLUMN_META[k];
     const sortIcon = sortColKey===k ? `<span class="sort-icon">${sortDir===1?'▲':'▼'}</span>` : '';
     return `<th style="width:${m.width}px" draggable="true"
@@ -2130,7 +2146,7 @@ function renderTableHeader(){
 // longer fit — see boardSplitterMove() below.
 let wbsPanelWidthOverride = null;
 function updateTableWidth(){
-  const total = visibleColumns().reduce((a,k)=>a+COLUMN_META[k].width,0) + ACTIONS_COL_WIDTH;
+  const total = visibleColumns().reduce((a,k)=>a+COLUMN_META[k].width,0) + ACTIONS_COL_WIDTH + HIDE_COL_WIDTH;
   document.querySelector('table.wbs-table').style.width = total+'px';
   document.getElementById('wbsPanel').style.width = (wbsPanelWidthOverride!=null ? wbsPanelWidthOverride : total)+'px';
 }
@@ -2187,7 +2203,7 @@ function saveUiState(){
     localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify({
       calendarMode, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride,
       critOnly: critOnlyEl ? critOnlyEl.checked : false,
-      collapsed,
+      collapsed, hiddenIds,
     }));
   }catch(err){
     // localStorage can throw (private browsing, storage disabled, quota) — losing the saved
@@ -2207,6 +2223,7 @@ function loadUiState(){
     if(saved.sortDir === 0 || saved.sortDir === 1 || saved.sortDir === 2) sortDir = saved.sortDir;
     if(Number.isFinite(saved.wbsPanelWidthOverride)) wbsPanelWidthOverride = saved.wbsPanelWidthOverride;
     if(saved.collapsed && typeof saved.collapsed === 'object') collapsed = {...saved.collapsed};
+    if(saved.hiddenIds && typeof saved.hiddenIds === 'object') hiddenIds = {...saved.hiddenIds};
     // critOnly is a plain checkbox in the toolbar, not a JS variable — restore it directly onto the
     // DOM element (its checked state is read fresh from the DOM by renderTable()/renderGantt() etc.)
     const critOnlyEl = document.getElementById('critOnly');
@@ -2237,8 +2254,13 @@ function renderTable(){
       : `<span class="collapse-btn" style="visibility:hidden">▼</span>`;
     const stateCls = `${t.id===selectedId?' selected-row':''}${t.id===clipboardId?' cut-row':''}${multiSelectIds.includes(t.id)?' chain-row':''}`;
     const tds = cols.map(k=>colTdHtml(k, t, isSum, depth, arrow, diff)).join('');
+    // v60: leading checkbox column to hide this row (and cascade to its descendants). Always renders
+    // unchecked — a task whose checkbox were checked wouldn't be in `rows` (visibleRows()) at all, since
+    // hiding removes the row from view immediately rather than leaving a checked-box behind.
+    const hideTd = `<td class="row-hide-cell"><input type="checkbox" title="隱藏此列（連同其下子任務）" onclick="event.stopPropagation()" onchange="hideRow('${t.id}')"></td>`;
     return `
       <tr data-id="${t.id}" class="${isSum?'summary-row':''} ${t.critical?'critical-row':''}${stateCls}" onclick="selectRow('${t.id}', event)" oncontextmenu="showContextMenu(event, '${t.id}')">
+        ${hideTd}
         ${tds}
         <td class="row-actions">
           <button class="icon-btn" onclick="event.stopPropagation(); openEditModal('${t.id}')" title="編輯">✎</button>
@@ -2249,9 +2271,10 @@ function renderTable(){
   }).join('');
   // v48: tag every data cell with its column key (post-render, index-aligned with `cols`) so the
   // cell-range-selection feature below can find/highlight cells without touching colTdHtml()'s branches.
+  // v60: offset by 1 — index 0 in each <tr> is now the leading hide-checkbox <td>, not the first data column.
   Array.from(body.children).forEach(tr=>{
     const tds = tr.children;
-    for(let i=0;i<cols.length;i++){ if(tds[i]) tds[i].dataset.col = cols[i]; }
+    for(let i=0;i<cols.length;i++){ if(tds[i+1]) tds[i+1].dataset.col = cols[i]; }
   });
   renderCellSelectionHighlight();
 }
@@ -2417,6 +2440,55 @@ document.addEventListener('click', function(e){
 });
 
 function toggleCollapse(id){ collapsed[id]=!collapsed[id]; saveUiState(); renderTable(); renderGantt(); }
+
+/* ---------- v60: hide a row (and cascade to its children) via the checkbox in the WBS table's
+   leftmost column ----------
+   This is deliberately a ONE-WAY action from the table itself: checking the box removes the row (and
+   every descendant) from view immediately, so there's nothing left in the table to uncheck afterward.
+   Restoring a hidden row instead goes through the separate "🙈 列顯示" panel (renderRowPanel below) —
+   same two-piece pattern as 欄位顯示 (hide inline, manage/restore in a dedicated panel), except here the
+   "hide" trigger is a checkbox per row rather than a right-click, since the user asked for a
+   checkbox-column interaction specifically (mirroring how column visibility works). */
+function hideRow(id){
+  hiddenIds[id] = true;
+  saveUiState();
+  renderTable();
+  renderGantt();
+  renderRowPanel();
+}
+function unhideRow(id){
+  delete hiddenIds[id];
+  saveUiState();
+  renderTable();
+  renderGantt();
+  renderRowPanel();
+}
+function toggleRowPanel(e){
+  e.stopPropagation();
+  const panel = document.getElementById('rowPanel');
+  const willOpen = panel.style.display !== 'block';
+  panel.style.display = willOpen ? 'block' : 'none';
+  if(willOpen) renderRowPanel();
+}
+function renderRowPanel(){
+  const panel = document.getElementById('rowPanel');
+  if(panel.style.display !== 'block') return;
+  const hiddenTasks = Object.keys(hiddenIds).map(id=>tasks.find(t=>t.id===id)).filter(Boolean);
+  if(!hiddenTasks.length){
+    panel.innerHTML = `<div class="row-panel-empty">目前沒有隱藏的任務列</div>`;
+    return;
+  }
+  hiddenTasks.sort((a,b)=>(a.wbs||'').localeCompare(b.wbs||'', undefined, {numeric:true}));
+  panel.innerHTML = hiddenTasks.map(t=>
+    `<label title="勾選以取消隱藏"><input type="checkbox" onchange="unhideRow('${t.id}')"> ${escAttr(t.wbs)} ${escAttr(t.name)}</label>`
+  ).join('');
+}
+document.addEventListener('click', function(e){
+  const panel = document.getElementById('rowPanel');
+  if(panel && panel.style.display==='block' && !e.target.closest('#rowPanel') && !e.target.closest('#rowPanelBtn')){
+    panel.style.display = 'none';
+  }
+});
 
 /* ---------- task relationship (predecessor / successor) detail panel ---------- */
 const REL_TYPE_LABEL = {FS:'完成→開始', SS:'開始→開始', FF:'完成→完成', SF:'開始→完成'};
@@ -3452,7 +3524,9 @@ function flashCellSelectionCopied(){
    Both exports share one plain <table> built from the SAME per-column values used for the v48
    Ctrl+C copy (cellCopyValue), so what you see is exactly what gets exported — not a DOM scrape.
    Unlike the on-screen table, the export always includes every task regardless of collapsed state,
-   since "匯出" is expected to produce the complete task list, not just whatever's currently expanded. */
+   since "匯出" is expected to produce the complete task list, not just whatever's currently expanded.
+   v60: a row explicitly hidden via the row-hide checkbox IS excluded here (and cascades to its
+   descendants) — unlike collapsed[], hiding a row is meant to keep it out of every export too. */
 function exportRowsFlat(){
   const rows = [];
   function walk(parentId, depth){
@@ -3464,8 +3538,9 @@ function exportRowsFlat(){
       });
     }
     kids.forEach(t=>{
+      if(hiddenIds[t.id]) return; // v60: hidden — skip the row itself AND everything under it
       rows.push({ task: t, depth });
-      if(hasKids(t)) walk(t.id, depth+1); // ignore collapsed[] — export is always the full tree
+      if(hasKids(t)) walk(t.id, depth+1); // ignore collapsed[] — export is always the full tree (except hidden rows, above)
     });
   }
   walk(null, 0);
@@ -3699,8 +3774,20 @@ ${exportGanttHtml()}
    the one export the user explicitly asked for as "A3圖", independent of the shared 紙張大小 selector
    used by the other two PDF exports) — same window.open()+auto-fit-to-one-page pattern as
    exportToPdfWithGantt() above. */
+// v60: true if this task or any ancestor is explicitly hidden via the row-hide checkbox — needed here
+// because, unlike visibleRows()/exportRowsFlat() above (which walk the tree top-down and can just skip
+// descending into a hidden branch), this filters the flat `tasks` array directly, so cascading has to
+// walk UP the parent chain instead.
+function isHiddenByRowOrAncestor(t){
+  let cur = t;
+  while(cur){
+    if(hiddenIds[cur.id]) return true;
+    cur = cur.parent ? tasks.find(x=>x.id===cur.parent) : null;
+  }
+  return false;
+}
 function getMilestoneTasks(){
-  return tasks.filter(t=>t.milestone && t.startDate).slice().sort((a,b)=>a.startDate-b.startDate);
+  return tasks.filter(t=>t.milestone && t.startDate && !isHiddenByRowOrAncestor(t)).slice().sort((a,b)=>a.startDate-b.startDate);
 }
 // done (progress 100) > overdue (start date already passed) > on the critical path > has some
 // progress logged > otherwise not started yet. Overdue/critical both read as "needs attention" (red)
