@@ -111,14 +111,13 @@
   .diff-neg{color:var(--danger);}
   .diff-pos{color:var(--success);}
   .row-actions{white-space:nowrap; display:flex; align-items:center; gap:4px;}
-  .row-hide-cell{text-align:center; padding:0 !important;}
-  .row-hide-cell input[type="checkbox"]{cursor:pointer; vertical-align:middle;}
   .icon-btn{border:none; background:transparent; cursor:pointer; color:var(--text-faint); font-size:13px; padding:6px 7px; border-radius:6px; vertical-align:middle; display:inline-flex; align-items:center; justify-content:center;}
   .icon-btn svg{display:block;}
   .icon-btn:hover{background:var(--border); color:var(--text);}
   .icon-btn:disabled{opacity:.25; cursor:default;}
   .icon-btn:disabled:hover{background:transparent; color:var(--text-faint);}
   .milestone-tag{color:var(--warning);}
+  .constraint-tag{font-size:10.5px; color:var(--text-faint); margin-left:4px; white-space:nowrap;}
 
   /* gantt */
   .gantt-header{position:sticky; top:0; z-index:3; background:#f8fafc;}
@@ -338,8 +337,13 @@
     border-radius:10px; box-shadow:0 10px 30px rgba(15,23,42,.18); padding:8px 10px; z-index:60; min-width:150px;
   }
   .col-panel label{display:flex; align-items:center; gap:7px; padding:4px 2px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap;}
-  #rowPanel{max-height:320px; overflow-y:auto; max-width:280px;}
+  #rowPanel{max-height:420px; min-width:260px; max-width:380px; overflow-y:auto; overflow-x:auto;}
   .row-panel-empty{font-size:12.5px; color:var(--text-faint); padding:4px 2px; white-space:nowrap;}
+  .row-panel-actions{display:flex; gap:8px; padding:2px 2px 8px; margin-bottom:6px; border-bottom:1px solid var(--border);}
+  .row-panel-actions button{border:1px solid var(--border-dark); background:var(--panel); color:var(--text); padding:3px 10px; border-radius:6px; font-size:12px; cursor:pointer; font-family:inherit;}
+  .row-panel-actions button:hover{background:var(--bg);}
+  .row-panel-item{display:flex; align-items:center; gap:6px; padding:3px 2px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap; border-radius:5px;}
+  .row-panel-item:hover{background:var(--bg);}
   .export-menu-item{display:block; width:100%; text-align:left; background:none; border:none; padding:7px 8px; font-size:12.5px; color:var(--text); cursor:pointer; white-space:nowrap; border-radius:6px; font-family:inherit;}
   .export-menu-item:hover{background:#f1f5f9;}
   .export-menu-divider{height:1px; background:var(--border); margin:4px 2px;}
@@ -376,7 +380,7 @@
       <div class="col-panel" id="colPanel" onclick="event.stopPropagation()"></div>
     </div>
     <div class="col-panel-wrap">
-      <button class="btn" id="rowPanelBtn" onclick="toggleRowPanel(event)" title="管理已隱藏的任務列">🙈 列顯示</button>
+      <button class="btn" id="rowPanelBtn" onclick="toggleRowPanel(event)" title="勾選要顯示的任務列（取消勾選＝隱藏，連同子任務）">▤ 列顯示</button>
       <div class="col-panel" id="rowPanel" onclick="event.stopPropagation()"></div>
     </div>
     <div class="col-panel-wrap">
@@ -494,6 +498,14 @@
       </div>
       <div class="field">
         <label class="checkline"><input type="checkbox" id="f_milestone" onchange="onMilestoneToggle()"> 設為里程碑</label>
+      </div>
+      <div class="field" id="f_constraintWrap" style="display:none">
+        <label>里程碑日期</label>
+        <select id="f_constraintType" onchange="onConstraintTypeChange()">
+          <option value="">依前置任務計算</option>
+          <option value="fixed">指定絕對日期</option>
+        </select>
+        <input type="date" id="f_constraintDate" style="margin-top:6px; display:none">
       </div>
       <div class="field">
         <label>前置任務（可複選，並可分別設定關係類型與 Lag/Lead）</label>
@@ -705,7 +717,7 @@ let tasks = [
   {id:'5', wbs:'2.1', name:'建築設計', parent:'4', duration:15, preds:[fs('3')], responsible:'陳建築師', budget:600000, actual:615000, progress:100},
   {id:'6', wbs:'2.2', name:'結構設計', parent:'4', duration:12, preds:[fs('5')], responsible:'李結構技師', budget:450000, actual:360000, progress:80},
   {id:'7', wbs:'2.3', name:'機電設計', parent:'4', duration:10, preds:[ss('5',5)], responsible:'林機電技師', budget:350000, actual:210000, progress:60},
-  {id:'8', wbs:'2.4', name:'設計審查會議', parent:'4', duration:1, preds:[fs('6'),fs('7')], responsible:'王經理', budget:0, actual:0, progress:0, milestone:true},
+  {id:'8', wbs:'2.4', name:'設計審查會議', parent:'4', duration:0, preds:[fs('6'),fs('7')], responsible:'王經理', budget:0, actual:0, progress:0, milestone:true},
 
   {id:'9', wbs:'3', name:'許可與發包', parent:null},
   {id:'10', wbs:'3.1', name:'建照申請', parent:'9', duration:20, preds:[fs('8')], responsible:'王經理', budget:100000, actual:40000, progress:40},
@@ -728,7 +740,7 @@ let tasks = [
   {id:'23', wbs:'7', name:'驗收與移交', parent:null},
   {id:'24', wbs:'7.1', name:'竣工測試', parent:'23', duration:10, preds:[fs('21'),fs('22')], responsible:'王經理', budget:150000, actual:0, progress:0},
   {id:'25', wbs:'7.2', name:'使用執照申請', parent:'23', duration:15, preds:[ff('24',5)], responsible:'王經理', budget:80000, actual:0, progress:0},
-  {id:'26', wbs:'7.3', name:'專案結案與移交', parent:'23', duration:1, preds:[fs('25')], responsible:'王經理', budget:0, actual:0, progress:0, milestone:true},
+  {id:'26', wbs:'7.3', name:'專案結案與移交', parent:'23', duration:0, preds:[fs('25')], responsible:'王經理', budget:0, actual:0, progress:0, milestone:true},
 ];
 // generates a fresh, guaranteed-unique default Activity ID for a brand-new/duplicated/auto-split task.
 // Always tries the next plain integer first (so ids stay short/predictable in the common case), but
@@ -987,12 +999,12 @@ function ganttFitLabel(text, cellWidthPx, baseFontPx){
   return { show:true, fontPx: Math.round(Math.min(fitFontPx, baseFontPx)*10)/10 };
 }
 let collapsed = {}; // summaryId -> bool
-// v60: id -> true for a task EXPLICITLY hidden via the row checkbox (distinct from collapsed{} above —
-// collapse only folds a summary's children in the on-screen tree/Gantt, but the always-full-tree
-// Excel/PDF-table exports deliberately ignore it; a hidden row removes the row itself, cascades to
-// every descendant, and — per the user's request — is honored by EVERY export, table exports included.
+// v60/v61: id -> true for a task EXPLICITLY hidden via the "▤ 列顯示" panel (distinct from
+// collapsed{} above — collapse only folds a summary's children in the on-screen tree/Gantt, but the
+// always-full-tree Excel/PDF-table exports deliberately ignore it; a hidden row removes the row
+// itself, cascades to every descendant, and — per the user's request — is honored by EVERY export,
+// table exports included.
 let hiddenIds = {};
-function isExplicitlyHidden(id){ return !!hiddenIds[id]; }
 let editingId = null;
 let selectedId = null;  // currently clicked/selected task row
 let clipboardId = null; // task cut with Ctrl+X, waiting to be pasted
@@ -1153,6 +1165,10 @@ function stripForSync(t){
     actual:t.actual||0, progress:t.progress||0, milestone:!!t.milestone,
     preds:(t.preds||[]).map(p=>({id:p.id, type:p.type, lag:p.lag||0})),
     successor,
+    // v62: milestone date-constraint mode — 'fixed' + an absolute date, or '' (empty) for the normal
+    // predecessor-driven calculation. Only meaningful when milestone===true, but always sent/read the
+    // same as every other field so it round-trips cleanly through undo/redo and the Google Sheet.
+    constraintType: t.constraintType || '', constraintDate: t.constraintDate || '',
     // report-only columns for the Google Sheet (P6-style Activity table) — the app never reads these
     // back as input, it always recomputes the full schedule from duration+preds+parent on load
     earlyStart:isoDate(t.startDate), earlyFinish:isoDate(t.endDate),
@@ -1169,6 +1185,7 @@ function snapshotTasks(){
     id:t.id, parent:t.parent===undefined?null:t.parent, name:t.name||'',
     duration:t.duration, responsible:t.responsible||'', budget:t.budget||0,
     actual:t.actual||0, progress:t.progress||0, milestone:!!t.milestone,
+    constraintType: t.constraintType || '', constraintDate: t.constraintDate || '',
     preds:(t.preds||[]).map(p=>({id:p.id, type:p.type, lag:p.lag||0})),
   }));
 }
@@ -1330,7 +1347,6 @@ const COLUMN_META = {
   milestoneFlag: {label:'里程碑', width:56},
 };
 const ACTIONS_COL_WIDTH = 126;
-const HIDE_COL_WIDTH = 30; // v60: fixed leading checkbox column for hiding a row — not part of COLUMN_META/columnOrder, same reason ACTIONS_COL_WIDTH above isn't: it's a structural control column, not a data column, so it's never draggable/reorderable/hideable itself.
 let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden interleaved
 // parentRef / milestoneFlag are already visible another way (tree indentation / ◆ icon on the name),
 // so they start hidden to avoid clutter — everything else backend-side is shown by default.
@@ -1402,6 +1418,16 @@ function buildCalendarDayList(startDate, count){
   return list;
 }
 const PROJECT_DAY_LIST = buildCalendarDayList(PROJECT_START, 600);
+// v62: parses a "YYYY-MM-DD" <input type="date"> value into a PROJECT_DAY_LIST index — the same
+// local-time (not UTC) construction convention already used by tsSetStartDate() above, to avoid the
+// day-shift pitfall of `new Date('YYYY-MM-DD')` (which parses as UTC midnight). Returns null for an
+// empty/invalid string so callers can fall back to normal predecessor-driven scheduling.
+function dayIndexOfIsoDate(iso){
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso||'');
+  if(!m) return null;
+  const dt = new Date(+m[1], +m[2]-1, +m[3]);
+  return Math.round((dt - PROJECT_START) / 86400000);
+}
 // dates can be displayed in either the ROC (Republic of China / Minguo) calendar or the
 // Gregorian (western/西元) calendar, toggled via the "民國 / 西元" buttons — setEra() below.
 // ROC year = Gregorian year - 1911 (e.g. 2026 -> 民國115年)
@@ -1465,10 +1491,13 @@ function demoteToSummary(t){
   const hadRealData = (t.duration!==undefined) || (t.preds&&t.preds.length) || (t.budget) || (t.responsible);
   if(!hadRealData) return null;
   const clone = {
+    // v62: t.duration===undefined ? 1 : t.duration — NOT `t.duration||1`, which would silently turn a
+    // real 0-duration milestone into a 1-day task (0 is falsy) when it gets spun off into a child here
     id: genNextId(), wbs:'', name: t.name, parent: t.id,
-    duration: t.duration||1, preds: (t.preds||[]).map(p=>({...p})),
+    duration: t.duration===undefined ? 1 : t.duration, preds: (t.preds||[]).map(p=>({...p})),
     responsible: t.responsible||'', budget: t.budget||0, actual: t.actual||0,
-    progress: t.progress||0, milestone: t.milestone||false
+    progress: t.progress||0, milestone: t.milestone||false,
+    constraintType: t.constraintType||'', constraintDate: t.constraintDate||''
   };
   tasks.push(clone);
   tasks.forEach(x=>{
@@ -1727,6 +1756,15 @@ function computeSchedule(){
       }
       es = Math.max(es, c);
     });
+    // v62: a milestone with a "fixed" date constraint ignores predecessor-driven scheduling entirely
+    // and uses the user-picked absolute date instead — the two are alternative modes (either an
+    // absolute date, or the date pushed by predecessor work), not a floor/ceiling on each other.
+    // Successors of this milestone are unaffected by which mode produced its ES/EF — they just read
+    // pred.ES/pred.EF normally in their own turn through this same loop, further down `order`.
+    if(t.milestone && t.constraintType==='fixed' && t.constraintDate){
+      const idx = dayIndexOfIsoDate(t.constraintDate);
+      if(idx!==null) es = idx;
+    }
     t.ES = Math.max(0, es);
     t.EF = t.ES + t.duration;
   });
@@ -1934,18 +1972,24 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'name': {
       const chainIdx = multiSelectIds.indexOf(t.id);
       const chainBadge = chainIdx>=0 ? `<span class="chain-badge" title="Ctrl+點擊選取順序 ${chainIdx+1}">${chainIdx+1}</span>` : '';
-      const nameText = `<span class="task-name-text" ondblclick="startNameEdit(event, '${t.id}')" title="連續點兩下可直接改名">${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>`;
+      // v62: a small text tag (not another emoji/icon) flags a milestone whose date is manually
+      // fixed rather than calculated from its predecessors
+      const constraintTag = (t.milestone && t.constraintType==='fixed') ? `<span class="constraint-tag" title="日期為手動指定，不受前置任務影響">［指定日期］</span>` : '';
+      const nameText = `<span class="task-name-text" ondblclick="startNameEdit(event, '${t.id}')" title="連續點兩下可直接改名">${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>${constraintTag}`;
       const nameCell = `<span style="padding-left:${depth*15}px; display:inline-flex; align-items:center; gap:3px" title="${isSum?'':'前置任務: '+predText(t)}">${arrow}${nameText}</span>`;
       return `<td class="col-name" title="${t.name}">${nameCell}${chainBadge}</td>`;
     }
     case 'resp': return `<td class="col-resp">${isSum?'':respSelectHtml(t)}</td>`;
-    case 'start': return `<td>${fmtROC(t.startDate)}</td>`;
+    // v62: a milestone has no meaningful "start" separate from its completion date (duration is
+    // always 0, so they're the same calendar day) — only the finish/completion date is shown, per
+    // the user's request; 最早開始/最晚開始 render blank for a milestone row.
+    case 'start': return `<td>${t.milestone ? '' : fmtROC(t.startDate)}</td>`;
     case 'end': return `<td>${fmtROC(t.endDate)}</td>`;
-    case 'lateStart': return `<td>${t.lateStartDate?fmtROC(t.lateStartDate):''}</td>`;
+    case 'lateStart': return `<td>${(t.lateStartDate && !t.milestone)?fmtROC(t.lateStartDate):''}</td>`;
     case 'lateFinish': return `<td>${t.lateFinishDate?fmtROC(t.lateFinishDate):''}</td>`;
     case 'dur': {
       if(isSum) return '<td></td>';
-      if(t.milestone) return `<td title="里程碑工期固定為 1 天">${t.duration}</td>`; // fixed at 1, not directly editable
+      if(t.milestone) return `<td title="里程碑工期固定為 0 天">${t.duration}</td>`; // fixed at 0, not directly editable
       return `<td class="editable-dur" onclick="startDurEdit(event, '${t.id}')" title="點一下可直接修改工期">${t.duration}</td>`;
     }
     case 'float': {
@@ -2131,7 +2175,7 @@ function quickAddTask(presetParent){
 function renderTableHeader(){
   const cols = visibleColumns();
   const headRow = document.getElementById('wbsHeadRow');
-  headRow.innerHTML = `<th style="width:${HIDE_COL_WIDTH}px" title="勾選以隱藏此列（連同其下子任務）"></th>` + cols.map(k=>{
+  headRow.innerHTML = cols.map(k=>{
     const m = COLUMN_META[k];
     const sortIcon = sortColKey===k ? `<span class="sort-icon">${sortDir===1?'▲':'▼'}</span>` : '';
     return `<th style="width:${m.width}px" draggable="true"
@@ -2146,7 +2190,7 @@ function renderTableHeader(){
 // longer fit — see boardSplitterMove() below.
 let wbsPanelWidthOverride = null;
 function updateTableWidth(){
-  const total = visibleColumns().reduce((a,k)=>a+COLUMN_META[k].width,0) + ACTIONS_COL_WIDTH + HIDE_COL_WIDTH;
+  const total = visibleColumns().reduce((a,k)=>a+COLUMN_META[k].width,0) + ACTIONS_COL_WIDTH;
   document.querySelector('table.wbs-table').style.width = total+'px';
   document.getElementById('wbsPanel').style.width = (wbsPanelWidthOverride!=null ? wbsPanelWidthOverride : total)+'px';
 }
@@ -2254,13 +2298,8 @@ function renderTable(){
       : `<span class="collapse-btn" style="visibility:hidden">▼</span>`;
     const stateCls = `${t.id===selectedId?' selected-row':''}${t.id===clipboardId?' cut-row':''}${multiSelectIds.includes(t.id)?' chain-row':''}`;
     const tds = cols.map(k=>colTdHtml(k, t, isSum, depth, arrow, diff)).join('');
-    // v60: leading checkbox column to hide this row (and cascade to its descendants). Always renders
-    // unchecked — a task whose checkbox were checked wouldn't be in `rows` (visibleRows()) at all, since
-    // hiding removes the row from view immediately rather than leaving a checked-box behind.
-    const hideTd = `<td class="row-hide-cell"><input type="checkbox" title="隱藏此列（連同其下子任務）" onclick="event.stopPropagation()" onchange="hideRow('${t.id}')"></td>`;
     return `
       <tr data-id="${t.id}" class="${isSum?'summary-row':''} ${t.critical?'critical-row':''}${stateCls}" onclick="selectRow('${t.id}', event)" oncontextmenu="showContextMenu(event, '${t.id}')">
-        ${hideTd}
         ${tds}
         <td class="row-actions">
           <button class="icon-btn" onclick="event.stopPropagation(); openEditModal('${t.id}')" title="編輯">✎</button>
@@ -2271,10 +2310,9 @@ function renderTable(){
   }).join('');
   // v48: tag every data cell with its column key (post-render, index-aligned with `cols`) so the
   // cell-range-selection feature below can find/highlight cells without touching colTdHtml()'s branches.
-  // v60: offset by 1 — index 0 in each <tr> is now the leading hide-checkbox <td>, not the first data column.
   Array.from(body.children).forEach(tr=>{
     const tds = tr.children;
-    for(let i=0;i<cols.length;i++){ if(tds[i+1]) tds[i+1].dataset.col = cols[i]; }
+    for(let i=0;i<cols.length;i++){ if(tds[i]) tds[i].dataset.col = cols[i]; }
   });
   renderCellSelectionHighlight();
 }
@@ -2441,23 +2479,62 @@ document.addEventListener('click', function(e){
 
 function toggleCollapse(id){ collapsed[id]=!collapsed[id]; saveUiState(); renderTable(); renderGantt(); }
 
-/* ---------- v60: hide a row (and cascade to its children) via the checkbox in the WBS table's
-   leftmost column ----------
-   This is deliberately a ONE-WAY action from the table itself: checking the box removes the row (and
-   every descendant) from view immediately, so there's nothing left in the table to uncheck afterward.
-   Restoring a hidden row instead goes through the separate "🙈 列顯示" panel (renderRowPanel below) —
-   same two-piece pattern as 欄位顯示 (hide inline, manage/restore in a dedicated panel), except here the
-   "hide" trigger is a checkbox per row rather than a right-click, since the user asked for a
-   checkbox-column interaction specifically (mirroring how column visibility works). */
-function hideRow(id){
-  hiddenIds[id] = true;
+/* ---------- v61: 列顯示 management panel — the ONLY place row hide/show happens ----------
+   An earlier version put a checkbox directly in the WBS table's leftmost column, but that cluttered
+   the table itself (user feedback), so all show/hide control now lives in this one panel instead.
+   Opening "▤ 列顯示" renders the FULL task tree — always fully expanded, independent of the
+   on-screen collapsed[] state — with one checkbox per task reflecting whether it's CURRENTLY VISIBLE
+   (i.e. not hidden itself, and no hidden ancestor; see isHiddenByRowOrAncestor() below). Unchecking a
+   task hides it and cascades to every descendant, via the same hiddenIds mechanism visibleRows()/
+   exportRowsFlat()/getMilestoneTasks() already respect. Checking a task clears its OWN hidden flag
+   and every ANCESTOR's too — otherwise checking a task buried under a hidden parent would visibly do
+   nothing, which is confusing in a tree-checkbox UI (the same convention file-explorer tree views
+   use: revealing a nested item also reveals the folders above it). 全部顯示/全部隱藏 give a one-click
+   reset either way. */
+function allTasksTreeOrder(){
+  const result = [];
+  function walk(parentId, depth){
+    let kids = tasks.filter(t=>t.parent===parentId);
+    if(sortColKey && sortDir){
+      kids = kids.slice().sort((a,b)=>{
+        const cmp = compareSortValues(sortValue(sortColKey,a), sortValue(sortColKey,b));
+        return sortDir===2 ? -cmp : cmp;
+      });
+    }
+    kids.forEach(t=>{
+      result.push({task:t, depth});
+      walk(t.id, depth+1);
+    });
+  }
+  walk(null, 0);
+  return result;
+}
+function setTaskVisibleInPanel(id, visible){
+  if(visible){
+    let cur = tasks.find(t=>t.id===id);
+    while(cur){
+      delete hiddenIds[cur.id];
+      cur = cur.parent ? tasks.find(x=>x.id===cur.parent) : null;
+    }
+  }else{
+    hiddenIds[id] = true; // cascades to descendants automatically (visibleRows()/exportRowsFlat() skip the whole branch)
+  }
   saveUiState();
   renderTable();
   renderGantt();
   renderRowPanel();
 }
-function unhideRow(id){
-  delete hiddenIds[id];
+function showAllTasks(){
+  hiddenIds = {};
+  saveUiState();
+  renderTable();
+  renderGantt();
+  renderRowPanel();
+}
+function hideAllTasks(){
+  // hiding every ROOT (parent-less) task cascades to hide the entire tree, without needing a
+  // hiddenIds entry for every single task individually
+  tasks.filter(t=>!t.parent).forEach(t=>{ hiddenIds[t.id] = true; });
   saveUiState();
   renderTable();
   renderGantt();
@@ -2473,15 +2550,23 @@ function toggleRowPanel(e){
 function renderRowPanel(){
   const panel = document.getElementById('rowPanel');
   if(panel.style.display !== 'block') return;
-  const hiddenTasks = Object.keys(hiddenIds).map(id=>tasks.find(t=>t.id===id)).filter(Boolean);
-  if(!hiddenTasks.length){
-    panel.innerHTML = `<div class="row-panel-empty">目前沒有隱藏的任務列</div>`;
+  const items = allTasksTreeOrder();
+  const buttons = `<div class="row-panel-actions">
+    <button type="button" onclick="showAllTasks()">全部顯示</button>
+    <button type="button" onclick="hideAllTasks()">全部隱藏</button>
+  </div>`;
+  if(!items.length){
+    panel.innerHTML = buttons + `<div class="row-panel-empty">目前沒有任何任務</div>`;
     return;
   }
-  hiddenTasks.sort((a,b)=>(a.wbs||'').localeCompare(b.wbs||'', undefined, {numeric:true}));
-  panel.innerHTML = hiddenTasks.map(t=>
-    `<label title="勾選以取消隱藏"><input type="checkbox" onchange="unhideRow('${t.id}')"> ${escAttr(t.wbs)} ${escAttr(t.name)}</label>`
-  ).join('');
+  const rows = items.map(({task:t, depth})=>{
+    const visible = !isHiddenByRowOrAncestor(t);
+    return `<label class="row-panel-item" style="padding-left:${depth*16}px" title="勾選以顯示，取消勾選以隱藏（連同其下子任務）">
+      <input type="checkbox" ${visible?'checked':''} onchange="setTaskVisibleInPanel('${t.id}', this.checked)">
+      <span>${escAttr(t.wbs)} ${escAttr(t.name)}</span>
+    </label>`;
+  }).join('');
+  panel.innerHTML = buttons + rows;
 }
 document.addEventListener('click', function(e){
   const panel = document.getElementById('rowPanel');
@@ -3461,9 +3546,9 @@ function cellCopyValue(key, t){
     case 'wbs': return t.wbs||'';
     case 'name': return t.name||'';
     case 'resp': return isSum ? '' : (t.responsible||'');
-    case 'start': return t.startDate ? fmtROC(t.startDate) : '';
+    case 'start': return (t.startDate && !t.milestone) ? fmtROC(t.startDate) : '';
     case 'end': return t.endDate ? fmtROC(t.endDate) : '';
-    case 'lateStart': return t.lateStartDate ? fmtROC(t.lateStartDate) : '';
+    case 'lateStart': return (t.lateStartDate && !t.milestone) ? fmtROC(t.lateStartDate) : '';
     case 'lateFinish': return t.lateFinishDate ? fmtROC(t.lateFinishDate) : '';
     case 'dur': return isSum ? '' : String(t.duration!=null ? t.duration : '');
     case 'float': return isSum ? '' : String(t.float||0);
@@ -4160,6 +4245,10 @@ function openAddModal(presetParent){
   document.getElementById('leafFields').style.display = 'block';
   document.getElementById('summaryNote').style.display = 'none';
   f_name.value=''; f_dur.value=5; f_dur.disabled=false; f_resp.value=''; f_budget.value=0; f_actual.value=0; f_progress.value=0; progVal.textContent=0; f_milestone.checked=false;
+  document.getElementById('f_constraintWrap').style.display = 'none';
+  document.getElementById('f_constraintType').value = '';
+  document.getElementById('f_constraintDate').value = '';
+  document.getElementById('f_constraintDate').style.display = 'none';
   fillParentSelect(presetParent===undefined?null:presetParent, null);
   updateRespDisplay();
   fillPredList(null);
@@ -4180,6 +4269,10 @@ function openEditModal(id){
     f_dur.value=t.duration; f_dur.disabled=false; f_resp.value=t.responsible||'';
     f_budget.value=t.budget||0; f_actual.value=t.actual||0; f_progress.value=t.progress||0; progVal.textContent=t.progress||0;
     f_milestone.checked = !!t.milestone;
+    document.getElementById('f_constraintWrap').style.display = t.milestone ? 'block' : 'none';
+    document.getElementById('f_constraintType').value = t.constraintType==='fixed' ? 'fixed' : '';
+    document.getElementById('f_constraintDate').value = t.constraintDate || '';
+    document.getElementById('f_constraintDate').style.display = t.constraintType==='fixed' ? 'block' : 'none';
     updateRespDisplay();
     fillPredList(id, t.preds||[]);
     onFParentChange();
@@ -4246,15 +4339,35 @@ function togglePredDetail(chk){
   if(detail) detail.style.display = chk.checked ? 'flex' : 'none';
 }
 function onMilestoneToggle(){
-  if(f_milestone.checked){ f_dur.value=1; f_dur.disabled=true; } else { f_dur.disabled=false; }
+  if(f_milestone.checked){ f_dur.value=0; f_dur.disabled=true; } else { f_dur.disabled=false; }
+  document.getElementById('f_constraintWrap').style.display = f_milestone.checked ? 'block' : 'none';
+  if(!f_milestone.checked){
+    // constraint only applies to milestones — reset it so an un-checked task doesn't silently keep
+    // a stale constraint hidden in the form if 設為里程碑 gets checked again later in this same modal session
+    document.getElementById('f_constraintType').value = '';
+    document.getElementById('f_constraintDate').value = '';
+    document.getElementById('f_constraintDate').style.display = 'none';
+  }
+}
+function onConstraintTypeChange(){
+  const isFixed = document.getElementById('f_constraintType').value === 'fixed';
+  document.getElementById('f_constraintDate').style.display = isFixed ? 'block' : 'none';
 }
 function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
 
 function saveTask(){
   const name = f_name.value.trim();
   if(!name){ alert('請輸入任務名稱'); return; }
+  // v62: a milestone with "指定絕對日期" selected must actually have a date, or it silently falls
+  // back to predecessor-driven scheduling with nothing telling the user why
+  if(f_milestone.checked && document.getElementById('f_constraintType').value==='fixed' && !document.getElementById('f_constraintDate').value){
+    alert('請選擇里程碑的指定日期，或改回「依前置任務計算」');
+    return;
+  }
   const parentVal = f_parent.value;
   const parent = parentVal===''? null : parentVal;
+  const constraintType = (f_milestone.checked && document.getElementById('f_constraintType').value==='fixed') ? 'fixed' : '';
+  const constraintDate = constraintType==='fixed' ? document.getElementById('f_constraintDate').value : '';
   const _pre = snapshotTasks();
 
   if(editingId!=null){
@@ -4267,12 +4380,14 @@ function saveTask(){
       placeUnderParent(t, parent);
     }
     if(!hasKids(t)){
-      t.duration = f_milestone.checked ? 1 : Math.max(1, Number(f_dur.value)||1);
+      t.duration = f_milestone.checked ? 0 : Math.max(1, Number(f_dur.value)||1);
       t.responsible = f_resp.value.trim();
       t.budget = Math.max(0, Number(f_budget.value)||0);
       t.actual = Math.max(0, Number(f_actual.value)||0);
       t.progress = Math.min(100, Math.max(0, Number(f_progress.value)||0));
       t.milestone = f_milestone.checked;
+      t.constraintType = constraintType;
+      t.constraintDate = constraintDate;
       t.preds = [...document.querySelectorAll('#f_preds .pred-chk:checked')].map(chk=>{
         const id = chk.getAttribute('data-id');
         const type = document.querySelector(`.pred-type[data-id="${id}"]`).value;
@@ -4281,7 +4396,7 @@ function saveTask(){
       });
     }
   } else {
-    const duration = f_milestone.checked ? 1 : Math.max(1, Number(f_dur.value)||1);
+    const duration = f_milestone.checked ? 0 : Math.max(1, Number(f_dur.value)||1);
     const responsible = f_resp.value.trim();
     const budget = Math.max(0, Number(f_budget.value)||0);
     const actual = Math.max(0, Number(f_actual.value)||0);
@@ -4294,7 +4409,7 @@ function saveTask(){
       return {id, type, lag};
     });
     if(parent!==null){ const pt = tasks.find(x=>x.id===parent); if(pt) demoteToSummary(pt); }
-    tasks.push({id:genNextId(), wbs:'', name, parent, duration, preds, responsible, budget, actual, progress, milestone});
+    tasks.push({id:genNextId(), wbs:'', name, parent, duration, preds, responsible, budget, actual, progress, milestone, constraintType, constraintDate});
     if(parent!==null) collapsed[parent] = false; // auto-expand so the new child is visible
   }
   closeModal();
