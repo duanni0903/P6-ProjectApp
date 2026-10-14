@@ -120,7 +120,12 @@
   .constraint-tag{font-size:10.5px; color:var(--text-faint); margin-left:4px; white-space:nowrap;}
 
   /* gantt */
-  .gantt-header{position:sticky; top:0; z-index:3; background:#f8fafc;}
+  /* v63: the date-axis header now stays pinned to the top of #ganttPanel while scrolling down through
+  tasks (same technique as the WBS table's own sticky <thead>) — it's a normal child of #ganttWrap, not
+  fixed/absolute, so it still pans horizontally in step with the body SVG below it; only the vertical
+  offset is "stuck". svg{display:block} (below) keeps it and the body SVG from picking up any inline
+  baseline gap between them. */
+  .gantt-header-sticky{position:sticky; top:0; z-index:3; background:#f8fafc;}
   .gantt-svg-wrap{position:relative;}
   /* v30: drag-to-zoom overlay sitting on top of the SVG's date-header band — see ganttZoomStart() */
   .gantt-zoom-handle{position:absolute; left:0; top:0; z-index:2; cursor:ew-resize;}
@@ -392,6 +397,13 @@
           <select id="exportPaperSize">
             <option value="A4">A4</option>
             <option value="A3">A3</option>
+          </select>
+        </label>
+        <label class="export-menu-paper-size">匯出字體大小
+          <select id="exportFontSize">
+            <option value="small">小</option>
+            <option value="medium" selected>中</option>
+            <option value="large">大</option>
           </select>
         </label>
         <button type="button" class="export-menu-item" onclick="exportToPdf()">📄 匯出 PDF（僅任務表）</button>
@@ -1717,6 +1729,22 @@ document.addEventListener('keydown', function(e){
   } else if(e.key==='Escape' && (clipboardId!=null || multiSelectIds.length)){
     if(clipboardId!=null) cancelCut();
     if(multiSelectIds.length) clearChainSelect();
+  } else if((e.key==='ArrowDown' || e.key==='ArrowUp') && selectedId!=null){
+    // v63: once a task row is selected (clicked), the up/down arrow keys step the selection to the
+    // next/previous VISIBLE row — same row list renderTable()/renderGantt() actually draw (respects
+    // collapsed summary tasks and the 只顯示關鍵路徑 filter), so this only ever lands on a row the user
+    // can actually see, same as clicking it directly would.
+    e.preventDefault();
+    const critOnly = document.getElementById('critOnly').checked;
+    const rows = visibleRows().filter(t=>!(critOnly && !t.critical));
+    const idx = rows.findIndex(t=>t.id===selectedId);
+    if(idx<0) return;
+    const nextIdx = e.key==='ArrowDown' ? idx+1 : idx-1;
+    if(nextIdx<0 || nextIdx>=rows.length) return;
+    const nextId = rows[nextIdx].id;
+    selectRow(nextId, null);
+    const row = document.querySelector(`tr[data-id="${nextId}"]`);
+    if(row) row.scrollIntoView({block:'nearest', behavior:'smooth'});
   }
 });
 // warn before leaving the page with local edits that haven't been synced to the Google Sheet yet —
@@ -1899,6 +1927,18 @@ function compareSortValues(a, b){
   if(typeof a==='number' && typeof b==='number') return a-b;
   return String(a).localeCompare(String(b), 'zh-Hant', {numeric:true, sensitivity:'base'});
 }
+// v64: sort only applies within a sibling group that's ALL leaf tasks — a group containing any
+// summary/parent task is left in its original WBS order, per user request: 排序只影響最底層子任務，
+// 上層架構（WBS 階層）順序不變. Shared by visibleRows()/allTasksTreeOrder()/exportRowsFlat() so the
+// on-screen table, the ▤ 列顯示 panel, and every export (Excel/PDF) all agree on the same ordering.
+function sortedKids(kids){
+  if(!sortColKey || !sortDir) return kids;
+  if(!kids.every(t=>!hasKids(t))) return kids;
+  return kids.slice().sort((a,b)=>{
+    const cmp = compareSortValues(sortValue(sortColKey,a), sortValue(sortColKey,b));
+    return sortDir===2 ? -cmp : cmp;
+  });
+}
 // click a column header: 1st click -> ascending, 2nd click (same column) -> descending,
 // 3rd click -> back to original order; clicking a different column starts fresh at ascending
 function sortByColumn(key){
@@ -1913,13 +1953,7 @@ function sortByColumn(key){
 function visibleRows(){
   const rows = [];
   function walk(parentId, depth){
-    let kids = tasks.filter(t=>t.parent===parentId);
-    if(sortColKey && sortDir){
-      kids = kids.slice().sort((a,b)=>{
-        const cmp = compareSortValues(sortValue(sortColKey,a), sortValue(sortColKey,b));
-        return sortDir===2 ? -cmp : cmp;
-      });
-    }
+    let kids = sortedKids(tasks.filter(t=>t.parent===parentId));
     kids.forEach(t=>{
       if(hiddenIds[t.id]) return; // v60: hidden — skip the row itself AND everything under it
       t._depth = depth;
@@ -2494,13 +2528,7 @@ function toggleCollapse(id){ collapsed[id]=!collapsed[id]; saveUiState(); render
 function allTasksTreeOrder(){
   const result = [];
   function walk(parentId, depth){
-    let kids = tasks.filter(t=>t.parent===parentId);
-    if(sortColKey && sortDir){
-      kids = kids.slice().sort((a,b)=>{
-        const cmp = compareSortValues(sortValue(sortColKey,a), sortValue(sortColKey,b));
-        return sortDir===2 ? -cmp : cmp;
-      });
-    }
+    let kids = sortedKids(tasks.filter(t=>t.parent===parentId));
     kids.forEach(t=>{
       result.push({task:t, depth});
       walk(t.id, depth+1);
@@ -3283,7 +3311,11 @@ function renderGantt(){
      different sizes next to each other ("一大一小"); only once even the smallest readable size still
      wouldn't fit the longest label is that row's labels omitted — the gridlines/bands themselves
      never disappear. */
-  let bands='', monthLabels='', gridLines='';
+  // v63: bands/hlines/arrows/bars/todayLine stay body-only (unchanged coordinates, still offset by
+  // headerH as before); gridLines is now split into headerGridLines (the middle-tier separator, confined
+  // within the header's own y:[0,headerH] range) and bodyGridLines (the finest-tier day/week columns
+  // running down through the task rows) — see the sticky-header split below for why.
+  let bands='', monthLabels='', headerGridLines='', bodyGridLines='';
   timescaleRows.forEach((row, tierIdx)=>{
     const { unit, mode } = row;
     const isCoarsest = tierIdx===0;
@@ -3318,9 +3350,9 @@ function renderGantt(){
         monthLabels += `<text class="${isCoarsest?'month-text':'axis-text'}"${fontAttr} x="${x0+(isCoarsest?6:3)}" y="${rowY+TIER_ROW_H-8}">${label}</text>`;
       }
       if(isFinest){
-        gridLines += `<line class="grid-line" x1="${x0}" y1="${headerH}" x2="${x0}" y2="${headerH+bodyH}"></line>`;
+        bodyGridLines += `<line class="grid-line" x1="${x0}" y1="${headerH}" x2="${x0}" y2="${headerH+bodyH}"></line>`;
       } else if(!isCoarsest){
-        gridLines += `<line class="grid-line" x1="${x0}" y1="${rowY}" x2="${x0}" y2="${rowY+TIER_ROW_H}"></line>`;
+        headerGridLines += `<line class="grid-line" x1="${x0}" y1="${rowY}" x2="${x0}" y2="${rowY+TIER_ROW_H}"></line>`;
       }
     });
   });
@@ -3443,8 +3475,23 @@ function renderGantt(){
     });
   }
 
-  const svg = `
-  <svg width="${width}" height="${height}">
+  // v63: split into a sticky header block (date axis — stays pinned to the top of #ganttPanel while
+  // scrolling down through tasks, same idea as the WBS table's own `position:sticky` <thead>) and a
+  // separate body SVG (bars/arrows/gridlines/today-line) that scrolls normally underneath it. Both are
+  // full-width children of #ganttWrap, so #ganttPanel's single scrollbar still moves them horizontally
+  // in lockstep — `position:sticky` only pins the vertical axis, so that stays untouched.
+  const headerSvg = `
+  <svg width="${width}" height="${headerH}">
+    <rect x="0" y="0" width="${width}" height="${headerH}" fill="#f8fafc"></rect>
+    ${headerGridLines}
+    ${monthLabels}
+  </svg>`;
+  const zoomHandle = `
+  <div class="gantt-zoom-handle${ganttZoomDragging?' dragging':''}" style="width:${width}px; height:${headerH}px;"
+       title="拖曳調整時間刻度寬度（像 P6 一樣，全部日期會一起縮放）；右鍵開啟 Timescale 設定"
+       onmousedown="ganttZoomStart(event)" oncontextmenu="showGanttHeaderMenu(event)"></div>`;
+  const bodySvg = `
+  <svg width="${width}" height="${bodyH+10}" viewBox="0 ${headerH} ${width} ${bodyH+10}">
     <defs>
       <marker id="arrowhead" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
         <path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"></path>
@@ -3452,18 +3499,14 @@ function renderGantt(){
       ${gcPatternDefs}
     </defs>
     ${bands}
-    <rect x="0" y="0" width="${width}" height="${headerH}" fill="#f8fafc"></rect>
-    ${gridLines}
+    ${bodyGridLines}
     ${hlines}
-    ${monthLabels}
     ${arrows}
     ${bars}
     ${todayLine}
-  </svg>
-  <div class="gantt-zoom-handle${ganttZoomDragging?' dragging':''}" style="width:${width}px; height:${headerH}px;"
-       title="拖曳調整時間刻度寬度（像 P6 一樣，全部日期會一起縮放）；右鍵開啟 Timescale 設定"
-       onmousedown="ganttZoomStart(event)" oncontextmenu="showGanttHeaderMenu(event)"></div>`;
-  document.getElementById('ganttWrap').innerHTML = svg;
+  </svg>`;
+  document.getElementById('ganttWrap').innerHTML =
+    `<div class="gantt-header-sticky" id="ganttHeaderSticky">${headerSvg}${zoomHandle}</div>${bodySvg}`;
 }
 
 /* ---------- sync vertical scroll between panels ---------- */
@@ -3615,13 +3658,7 @@ function flashCellSelectionCopied(){
 function exportRowsFlat(){
   const rows = [];
   function walk(parentId, depth){
-    let kids = tasks.filter(t=>t.parent===parentId);
-    if(sortColKey && sortDir){
-      kids = kids.slice().sort((a,b)=>{
-        const cmp = compareSortValues(sortValue(sortColKey,a), sortValue(sortColKey,b));
-        return sortDir===2 ? -cmp : cmp;
-      });
-    }
+    let kids = sortedKids(tasks.filter(t=>t.parent===parentId));
     kids.forEach(t=>{
       if(hiddenIds[t.id]) return; // v60: hidden — skip the row itself AND everything under it
       rows.push({ task: t, depth });
@@ -3647,7 +3684,7 @@ function exportTableHtml(){
     }).join('');
     return `<tr>${tds}</tr>`;
   }).join('');
-  return `<table style="border-collapse:collapse; font-family:Arial, 'Microsoft JhengHei', sans-serif; font-size:12px;"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+  return `<table style="border-collapse:collapse; font-family:Arial, 'Microsoft JhengHei', sans-serif; font-size:${scaledFontPx(12)}px;"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
 }
 function triggerFileDownload(filename, mime, content){
   const blob = new Blob([content], { type: mime });
@@ -3677,6 +3714,19 @@ function exportPaperSizeValue(){
   const sel = document.getElementById('exportPaperSize');
   return (sel && sel.value) || 'A4';
 }
+// v65: 匯出字體大小 — reads the 字體大小 selector in the export menu (小/中/大) and returns a
+// multiplier applied to the base font sizes used by every export (Excel / PDF 任務表 / PDF+甘特圖).
+// Mirrors exportPaperSizeValue()'s pattern exactly so it's a drop-in sibling, not a parallel mechanism.
+const EXPORT_FONT_SCALE = { small: 0.85, medium: 1, large: 1.25 };
+function exportFontScaleValue(){
+  const sel = document.getElementById('exportFontSize');
+  const key = (sel && sel.value) || 'medium';
+  return EXPORT_FONT_SCALE[key] || 1;
+}
+// rounds to 1 decimal place so generated CSS stays readable (e.g. 10.2px, not 10.199999999999999px)
+function scaledFontPx(basePx){
+  return Math.round(basePx * exportFontScaleValue() * 10) / 10;
+}
 // landscape mm dimensions for each supported paper size (used both for the @page CSS rule and to
 // compute the printable pixel area for the v52 auto-fit-to-one-page scaling below).
 const EXPORT_PAGE_MM = { A4: { w: 297, h: 210 }, A3: { w: 420, h: 297 } };
@@ -3701,8 +3751,8 @@ function exportToPdf(){
 <style>
   ${exportPageSizeCss()}
   body{font-family:'Microsoft JhengHei', Arial, sans-serif; padding:16px; color:#111;}
-  h1{font-size:16px; margin:0 0 12px;}
-  table{border-collapse:collapse; width:100%; font-size:11px;}
+  h1{font-size:${scaledFontPx(16)}px; margin:0 0 12px;}
+  table{border-collapse:collapse; width:100%; font-size:${scaledFontPx(11)}px;}
   th, td{border:1px solid #999; padding:4px 6px; text-align:left;}
   th{background:#e5e7eb;}
   ${EXPORT_PRINT_FAB_CSS}
@@ -3738,7 +3788,7 @@ function exportGanttHtml(){
   // aligned at any scale. Only the cell font/padding below are safe to shrink on their own.
   const TIER_ROW_H = 28;
   const rowH = 34;
-  const cellFontPx = 9;
+  const cellFontPx = scaledFontPx(9); // v65: 匯出字體大小 — safe to scale independently of rowH/TIER_ROW_H (see note above)
   const headerH = TIER_ROW_H * ganttTimescaleRows.length;
   const colWidth = k => (COLUMN_META[k] && COLUMN_META[k].width) || 60;
   const tableWidth = cols.reduce((sum,k)=> sum + colWidth(k), 0);
@@ -3755,11 +3805,16 @@ function exportGanttHtml(){
     }).join('');
     return `<div style="height:${rowH}px; box-sizing:border-box; display:flex; align-items:center; border-bottom:1px solid #eee; ${isSum?'font-weight:bold; background:#f8fafc;':''}">${cells}</div>`;
   }).join('');
-  // Pull out just the <svg>...</svg> itself — #ganttWrap also holds a sibling drag-to-zoom overlay div
-  // (position:absolute in the live page) that would otherwise sit inline and misalign the table.
+  // Pull out just the <svg>...</svg> blocks — #ganttWrap now holds a header svg (inside the sticky
+  // wrapper, v63) and a body svg as two separate elements, plus a drag-to-zoom overlay div sandwiched
+  // between them (position:absolute in the live page) that would otherwise sit inline and misalign the
+  // table. Match each <svg>...</svg> block individually (non-greedy, global) rather than one greedy
+  // single match, so the handle div in between is excluded either way; concatenating the header+body
+  // svg blocks back-to-back reproduces the original combined (header-on-top-of-body) static layout,
+  // since svg{display:block} stacks them with no gap.
   const wrapHtml = document.getElementById('ganttWrap').innerHTML;
-  const svgMatch = wrapHtml.match(/<svg[\s\S]*<\/svg>/);
-  const svgHtml = svgMatch ? svgMatch[0] : wrapHtml;
+  const svgMatches = wrapHtml.match(/<svg[\s\S]*?<\/svg>/g);
+  const svgHtml = svgMatches ? svgMatches.join('') : wrapHtml;
   return `<div style="display:flex; align-items:flex-start; font-size:${cellFontPx}px;">
     <div style="flex:none; width:${tableWidth}px; border-right:1px solid #999;">
       <div style="height:${headerH}px; box-sizing:border-box; border-bottom:1px solid #999; display:flex; align-items:center; font-weight:bold; background:#e5e7eb;">${headerCells}</div>
@@ -3772,7 +3827,12 @@ function exportGanttHtml(){
 // ...) defined in the main page's <style>, not inline attributes — copied verbatim here (plus the CSS
 // variables they reference) so a copy of the SVG still renders correctly inside the separate print
 // window's own document, which doesn't inherit the main page's stylesheet.
-const GANTT_EXPORT_CSS = `
+// v65: turned from a static const into a function so the three text classes drawn inside the Gantt
+// SVG itself (axis month labels / bar labels) also follow the 匯出字體大小 selector, not just the
+// task-table cells beside it — otherwise picking "大" would grow the table text but leave the chart's
+// own labels at their original size, which looks inconsistent in the exported PDF.
+function ganttExportCss(){
+  return `
   svg{display:block;}
   .month-band{fill:#f8fafc;}
   .month-band.alt{fill:#eef2f7;}
@@ -3783,10 +3843,11 @@ const GANTT_EXPORT_CSS = `
   .summary-bar-shape{fill:#334155;}
   .arrow-path{fill:none; stroke:#94a3b8; stroke-width:1.2;}
   .arrow-path.crit{stroke:#dc2626; stroke-width:1.3;}
-  .axis-text{font-size:10.5px; fill:#64748b; font-family:inherit;}
-  .month-text{font-size:11px; fill:#1e293b; font-weight:700; font-family:inherit;}
-  .bar-label{font-size:10px; fill:#fff; font-family:inherit; pointer-events:none;}
+  .axis-text{font-size:${scaledFontPx(10.5)}px; fill:#64748b; font-family:inherit;}
+  .month-text{font-size:${scaledFontPx(11)}px; fill:#1e293b; font-weight:700; font-family:inherit;}
+  .bar-label{font-size:${scaledFontPx(10)}px; fill:#fff; font-family:inherit; pointer-events:none;}
 `;
+}
 function exportToPdfWithGantt(){
   const title = exportTitle();
   const paperSize = exportPaperSizeValue();
@@ -3802,8 +3863,8 @@ function exportToPdfWithGantt(){
 <style>
   ${exportPageSizeCss()}
   body{font-family:'Microsoft JhengHei', Arial, sans-serif; padding:10px; color:#111;}
-  h1{font-size:13px; margin:0 0 6px;}
-  ${GANTT_EXPORT_CSS}
+  h1{font-size:${scaledFontPx(13)}px; margin:0 0 6px;}
+  ${ganttExportCss()}
   ${EXPORT_PRINT_FAB_CSS}
 </style>
 </head><body>
