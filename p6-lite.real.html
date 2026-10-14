@@ -1417,7 +1417,7 @@ function buildCalendarDayList(startDate, count){
   for(let i=0;i<count;i++){ list.push(new Date(d)); d.setDate(d.getDate()+1); }
   return list;
 }
-const PROJECT_DAY_LIST = buildCalendarDayList(PROJECT_START, 600);
+const PROJECT_DAY_LIST = buildCalendarDayList(PROJECT_START, 3650); // ~10 years of headroom — a long dependency chain (e.g. many tasks each tens/hundreds of days) can push a schedule's EF well past day 600 even with no single oversized duration; running out of precomputed days here silently produced undefined dates that crashed rollup()/.getTime() downstream
 // v62: parses a "YYYY-MM-DD" <input type="date"> value into a PROJECT_DAY_LIST index — the same
 // local-time (not UTC) construction convention already used by tsSetStartDate() above, to avoid the
 // day-shift pitfall of `new Date('YYYY-MM-DD')` (which parses as UTC midnight). Returns null for an
