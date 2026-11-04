@@ -755,6 +755,11 @@ const SHEET_CONFIGURED = !!SHEET_API_URL && SHEET_API_URL.indexOf('PASTE_') !== 
 const DEFAULT_PROJECT_ID = 'default';
 let currentProjectId = null;
 let projects = []; // [{id, name, createdAt}, ...] — loaded from the backend's ?list=1 call
+// v專案改名同步: true only when `projects` reflects a successful ?list=1 fetch (the authoritative,
+// cross-device registry). false when SHEET_CONFIGURED is false or the fetch failed/offline — in that
+// case `projects` is just a single-entry placeholder, not real registry data. enterProject() uses this
+// to decide whether the registry name should win over a (possibly stale, pre-sync-era) local override.
+let projectsFromRegistry = false;
 function storageKey(baseKey){
   return (currentProjectId && currentProjectId !== DEFAULT_PROJECT_ID) ? (baseKey + '__' + currentProjectId) : baseKey;
 }
@@ -4841,6 +4846,7 @@ async function loadProjectList(){
   const homeMsg = document.getElementById('homeMsg');
   if(!SHEET_CONFIGURED){
     projects = [{ id: DEFAULT_PROJECT_ID, name: projectName }];
+    projectsFromRegistry = false;
     renderHomeScreen();
     return;
   }
@@ -4851,9 +4857,11 @@ async function loadProjectList(){
     projects = (data && Array.isArray(data.projects) && data.projects.length)
       ? data.projects
       : [{ id: DEFAULT_PROJECT_ID, name: projectName }];
+    projectsFromRegistry = true;
     if(homeMsg) homeMsg.textContent = '';
   }catch(err){
     projects = [{ id: DEFAULT_PROJECT_ID, name: projectName }];
+    projectsFromRegistry = false;
     if(homeMsg) homeMsg.textContent = '無法連線到 Google Sheet，僅顯示預設專案（離線模式）';
   }
   renderHomeScreen();
@@ -4911,9 +4919,19 @@ function enterProject(id){
   resetColumnLayoutToDefaults();
   resetUiStateToDefaults();
   const known = projects.find(p=>p.id===currentProjectId);
-  projectName = (known && known.name) ? known.name : document.getElementById('projectTitle').textContent;
-  applyProjectName();
-  applyStoredProjectNameOverride(); // a page-side rename (per project) still wins over the registry name above
+  if(known && known.name && projectsFromRegistry){
+    // v專案改名同步：改名現在會同步寫回後端的「專案」註冊表，所以只要讀得到真正的註冊表資料，
+    // 這裡就是跨裝置/瀏覽器都一致的正確來源——不能再讓本機覆寫蓋過去，否則就是「首頁跟進去專案
+    // 的名稱不同步」：首頁一律顯示註冊表最新名稱，但進入專案這裡卻被這台瀏覽器舊的本機覆寫蓋掉，
+    // 兩邊各自顯示不同名稱。本機覆寫是同步功能上線前的過渡機制，現在只在讀不到註冊表資料（離線/
+    // 連線失敗）時才當作備援使用，見下面的 else 分支。
+    projectName = known.name;
+    applyProjectName();
+  } else {
+    projectName = (known && known.name) ? known.name : document.getElementById('projectTitle').textContent;
+    applyProjectName();
+    applyStoredProjectNameOverride(); // 離線或讀不到註冊表時的備援，才讓本機覆寫生效
+  }
   loadColumnLayout();
   loadUiState();
   loadFromSheet();
