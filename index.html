@@ -356,10 +356,27 @@
   .export-menu-divider{height:1px; background:var(--border); margin:4px 2px;}
   .export-menu-paper-size{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 8px 6px; font-size:12px; color:var(--text-dim); white-space:nowrap;}
   .export-menu-paper-size select{font-size:12px; padding:2px 4px; border-radius:5px; border:1px solid var(--border-dark); font-family:inherit;}
+  /* ---------- home screen (multi-project picker) ---------- */
+  .home-screen{max-width:960px; margin:40px auto; padding:0 20px 40px;}
+  .home-header{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px;}
+  .home-header h1{font-size:22px; margin:0;}
+  .home-msg{color:var(--text-dim); font-size:13px; min-height:18px; margin-bottom:12px;}
+  .home-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(200px,1fr)); gap:14px;}
+  .project-card{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px 16px; cursor:pointer; min-height:88px; display:flex; align-items:center; justify-content:center; text-align:center; transition:border-color .15s, box-shadow .15s;}
+  .project-card:hover{border-color:var(--primary); box-shadow:0 2px 8px rgba(37,99,235,.12);}
+  .project-card-name{font-size:15px; font-weight:600; color:var(--text);}
+  .project-card.add-new{border-style:dashed; color:var(--text-dim); flex-direction:column; gap:4px;}
+  .project-card.add-new:hover{color:var(--primary);}
+  .project-card-add-icon{font-size:22px; line-height:1;}
 </style>
 </head>
 <body>
-<div class="app">
+<div class="home-screen" id="homeScreen">
+  <div class="home-header"><h1>工程專案管理</h1></div>
+  <div class="home-msg" id="homeMsg"></div>
+  <div class="home-grid" id="homeGrid"></div>
+</div>
+<div class="app" id="appScreen" style="display:none">
 
   <div class="titlebar">
     <div>
@@ -368,6 +385,7 @@
     <div style="text-align:right">
       <div class="sub" id="metaLine"></div>
       <div style="display:flex; align-items:center; gap:8px; justify-content:flex-end; margin-top:2px;">
+        <button class="btn" onclick="goHome()" title="回到首頁選擇其他專案">← 返回首頁</button>
         <div class="sync-status sync-offline" id="syncStatus">尚未連線</div>
         <button class="btn primary" id="syncNowBtn" onclick="manualSync()" title="把目前尚未同步的變更寫回 Google Sheet">💾 同步</button>
       </div>
@@ -727,6 +745,26 @@ const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwaDvA-PAO0eTBNTv
 const API_TOKEN = '123456789';
 const SHEET_CONFIGURED = !!SHEET_API_URL && SHEET_API_URL.indexOf('PASTE_') !== 0;
 
+/* ---------- multi-project support ----------
+   One shared Google Sheet + one shared Apps Script Web App now serves multiple "projects", each with
+   its own set of tasks_<id>/負責人_<id>/關係_<id> sheet tabs on the backend (see Code.gs). The very
+   first/original project (北一) keeps using the ORIGINAL unsuffixed sheet names via the special id
+   'default' — zero data migration needed. currentProjectId is null until the user picks (or creates) a
+   project on the home screen; every per-browser localStorage key and every Sheet API call is then
+   scoped to it via storageKey()/apiUrl() below. */
+const DEFAULT_PROJECT_ID = 'default';
+let currentProjectId = null;
+let projects = []; // [{id, name, createdAt}, ...] — loaded from the backend's ?list=1 call
+function storageKey(baseKey){
+  return (currentProjectId && currentProjectId !== DEFAULT_PROJECT_ID) ? (baseKey + '__' + currentProjectId) : baseKey;
+}
+function apiUrl(params){
+  const qp = [];
+  if(currentProjectId && currentProjectId !== DEFAULT_PROJECT_ID) qp.push('project=' + encodeURIComponent(currentProjectId));
+  Object.keys(params||{}).forEach(k => qp.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k])));
+  return SHEET_API_URL + (qp.length ? ('?' + qp.join('&')) : '');
+}
+
 /* ---------- sample data (engineering project) ---------- */
 /* preds: [{id, type: 'FS'|'SS'|'FF'|'SF', lag: workdays (negative = lead)}] */
 function fs(id, lag){ return {id, type:'FS', lag:lag||0}; }
@@ -1079,15 +1117,17 @@ function applyProjectName(){
 // left as-is so a Sheet-side project name still works for anyone who hasn't renamed it from the page.
 const PROJECT_NAME_KEY = 'p6lite_project_name_v1';
 function saveProjectNameOverride(name){
-  try{ localStorage.setItem(PROJECT_NAME_KEY, name); }catch(err){ console.warn('無法儲存專案名稱', err); }
+  try{ localStorage.setItem(storageKey(PROJECT_NAME_KEY), name); }catch(err){ console.warn('無法儲存專案名稱', err); }
 }
 function loadProjectNameOverride(){
-  try{ return localStorage.getItem(PROJECT_NAME_KEY); }catch(err){ return null; }
+  try{ return localStorage.getItem(storageKey(PROJECT_NAME_KEY)); }catch(err){ return null; }
 }
-(function applyStoredProjectNameOverride(){
+// v多專案: no longer auto-run at script load — each project has its own override, so this is called
+// from enterProject() once currentProjectId is known.
+function applyStoredProjectNameOverride(){
   const saved = loadProjectNameOverride();
   if(saved && saved.trim()){ projectName = saved.trim(); applyProjectName(); }
-})();
+}
 function startProjectNameEdit(e){
   if(e) e.stopPropagation();
   // mutate the stable wrapper <div> around the title, not the <h1>'s own outerHTML — Chromium can throw
@@ -1306,7 +1346,7 @@ function setBaseline(){
 function doSync(){
   // owners' workload stats are already fresh (computeSchedule() calls computeOwners() on every render);
   // relationships is a pure derived snapshot built fresh here, never stored in a global
-  const payload = JSON.stringify({ token: API_TOKEN, tasks: tasks.map(stripForSync), owners: owners, relationships: computeRelationships() });
+  const payload = JSON.stringify({ token: API_TOKEN, project: currentProjectId, tasks: tasks.map(stripForSync), owners: owners, relationships: computeRelationships() });
   // text/plain avoids a CORS preflight (OPTIONS) request, which Apps Script Web Apps don't handle —
   // sending JSON as a plain-text body and parsing it server-side (JSON.parse(e.postData.contents)) is
   // the standard workaround for POSTing to an Apps Script Web App from a page hosted elsewhere
@@ -1327,7 +1367,7 @@ async function loadFromSheet(){
   }
   setSyncStatus('saving', '從 Google Sheet 載入中…');
   try{
-    const res = await fetch(SHEET_API_URL, { method:'GET' });
+    const res = await fetch(apiUrl({}), { method:'GET' });
     const data = await res.json();
     // doGet now returns { tasks:[...], owners:[...], settings:{...} } (not a bare array) — owners is the
     // 負責人 分頁's editable name/contact/dept rows; relationships is never read back (see
@@ -1370,10 +1410,21 @@ async function loadFromSheet(){
       owners = Array.isArray(data.owners) ? data.owners.map(o=>({name:String(o.name||''), contact:o.contact?String(o.contact):'', dept:o.dept?String(o.dept):''})).filter(o=>o.name) : [];
       setSyncStatus('ok', '已從 Google Sheet 載入');
     } else {
-      setSyncStatus('offline', 'Google Sheet 目前是空的，先顯示內建範例資料（新增或編輯後按「💾 同步」寫入）');
+      // v多專案: an empty sheet used to mean "fall back to the built-in demo tasks still sitting in
+      // memory from page load" — harmless for a single project, but WRONG once you can switch between
+      // projects: without clearing here, entering a brand-new empty project would keep showing
+      // whichever OTHER project's tasks happened to be in memory beforehand. A genuinely empty project
+      // (new, or an existing one with no tasks yet) should start from a clean, truly-empty slate.
+      tasks = []; owners = []; idCounter = 0;
+      selectedId = null; clipboardId = null; multiSelectIds = [];
+      setSyncStatus('offline', '這個專案目前沒有任何任務資料，新增任務後按「💾 同步」寫入 Google Sheet');
     }
   }catch(err){
-    setSyncStatus('error', '無法連線到 Google Sheet，目前顯示內建範例資料（離線模式）');
+    // same cross-project leak risk as above applies to a failed fetch — clear rather than keep showing
+    // whatever project happened to be in memory before this call.
+    tasks = []; owners = []; idCounter = 0;
+    selectedId = null; clipboardId = null; multiSelectIds = [];
+    setSyncStatus('error', '無法連線到 Google Sheet（離線模式）');
   }
   // a fresh load matches the Sheet exactly (or is a clean offline/demo start) — any undo/redo history
   // from a previous project's session shouldn't carry over into this one
@@ -1413,6 +1464,18 @@ let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden inte
 // so they start hidden to avoid clutter — everything else backend-side is shown by default.
 let columnHidden = { parentRef:true, milestoneFlag:true, baselineStart:true, baselineEnd:true }; // key -> true when hidden; baseline 欄位預設隱藏（已有基準線比對功能可用 Gantt 圖上的「顯示基準線」勾選框呈現），需要的話可從 ▤ 列顯示 勾出來
 function visibleColumns(){ return columnOrder.filter(k=>!columnHidden[k]); }
+// v多專案: hardcoded snapshots taken right here (before any localStorage load can mutate the vars
+// above), so switching projects can cleanly reset to these defaults before restoring the NEW project's
+// own saved layout — otherwise a layout tweak made inside project A would silently leak into project B.
+const DEFAULT_COLUMN_ORDER = columnOrder.slice();
+const DEFAULT_COLUMN_HIDDEN = {...columnHidden};
+const DEFAULT_COLUMN_WIDTHS = {};
+Object.keys(COLUMN_META).forEach(k=>{ DEFAULT_COLUMN_WIDTHS[k] = COLUMN_META[k].width; });
+function resetColumnLayoutToDefaults(){
+  columnOrder = DEFAULT_COLUMN_ORDER.slice();
+  columnHidden = {...DEFAULT_COLUMN_HIDDEN};
+  Object.keys(COLUMN_META).forEach(k=>{ if(DEFAULT_COLUMN_WIDTHS[k]!==undefined) COLUMN_META[k].width = DEFAULT_COLUMN_WIDTHS[k]; });
+}
 
 /* ---------- column layout persistence (order / visibility / width) ----------
    This is purely a per-browser display preference (which columns show, in what order, how wide),
@@ -1425,7 +1488,7 @@ function saveColumnLayout(){
   try{
     const widths = {};
     Object.keys(COLUMN_META).forEach(k=>{ widths[k] = COLUMN_META[k].width; });
-    localStorage.setItem(COLUMN_LAYOUT_STORAGE_KEY, JSON.stringify({
+    localStorage.setItem(storageKey(COLUMN_LAYOUT_STORAGE_KEY), JSON.stringify({
       order: columnOrder, hidden: columnHidden, widths,
     }));
   }catch(err){
@@ -1436,7 +1499,7 @@ function saveColumnLayout(){
 }
 function loadColumnLayout(){
   try{
-    const raw = localStorage.getItem(COLUMN_LAYOUT_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(COLUMN_LAYOUT_STORAGE_KEY));
     if(!raw) return;
     const saved = JSON.parse(raw);
     const knownKeys = Object.keys(COLUMN_META);
@@ -1464,7 +1527,8 @@ function loadColumnLayout(){
     console.warn('無法讀取欄位顯示設定，使用預設值', err);
   }
 }
-loadColumnLayout(); // apply before the first render() so there's no flash of the default layout
+// v多專案: no longer called unconditionally at script load — enterProject() calls
+// resetColumnLayoutToDefaults() then this, once currentProjectId (and therefore storageKey()) is known.
 
 /* ---------- date / workday helpers ---------- */
 // v38 briefly added a whole-project 工作天／日曆天 toggle (workday vs calendar-day scheduling), but the
@@ -1942,9 +2006,13 @@ function getStats(){
   const totalActual = leaves.reduce((a,t)=>a+(t.actual||0),0);
   const overallProgress = totalBudget>0
     ? Math.round(leaves.reduce((a,t)=>a+(t.progress||0)*(t.budget||0),0)/totalBudget)
-    : Math.round(leaves.reduce((a,t)=>a+(t.progress||0),0)/leaves.length);
-  const endDate = new Date(Math.max(...leaves.map(t=>t.endDate.getTime())));
-  const totalWD = Math.max(...leaves.map(t=>t.EF));
+    : (leaves.length ? Math.round(leaves.reduce((a,t)=>a+(t.progress||0),0)/leaves.length) : 0);
+  // v多專案: a brand-new project starts with ZERO tasks — Math.max(...[]) is -Infinity, which used to
+  // turn endDate/totalWD into NaN/Invalid Date (and cascade into NaN SVG widths in renderGantt below).
+  // That path was unreachable before multi-project (there was always at least one demo task in memory),
+  // so guard it explicitly now with a sane empty-project default instead.
+  const endDate = leaves.length ? new Date(Math.max(...leaves.map(t=>t.endDate.getTime()))) : new Date(PROJECT_START);
+  const totalWD = leaves.length ? Math.max(...leaves.map(t=>t.EF)) : 0;
   const criticalCount = leaves.filter(t=>t.critical).length;
   const respSet = new Set(leaves.map(t=>t.responsible).filter(Boolean));
   return {totalBudget, totalActual, overallProgress, endDate, totalWD, criticalCount, leaves: leaves.length, respCount: respSet.size};
@@ -2366,7 +2434,7 @@ function saveUiState(){
   try{
     const critOnlyEl = document.getElementById('critOnly');
     const showBaselineEl = document.getElementById('showBaseline');
-    localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify({
+    localStorage.setItem(storageKey(UI_STATE_STORAGE_KEY), JSON.stringify({
       calendarMode, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride,
       critOnly: critOnlyEl ? critOnlyEl.checked : false,
       showBaseline: showBaselineEl ? showBaselineEl.checked : true,
@@ -2380,7 +2448,7 @@ function saveUiState(){
 }
 function loadUiState(){
   try{
-    const raw = localStorage.getItem(UI_STATE_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(UI_STATE_STORAGE_KEY));
     if(!raw) return;
     const saved = JSON.parse(raw);
     if(!saved || typeof saved !== 'object') return;
@@ -2404,7 +2472,27 @@ function loadUiState(){
     console.warn('無法還原介面顯示狀態', err);
   }
 }
-loadUiState(); // apply before the first render() so there's no flash of the default arrangement
+// v多專案: hardcoded defaults mirrored here (matching each variable's original declaration above) so
+// switching projects can reset the whole arrangement before restoring the NEW project's own saved
+// state — otherwise zoom/sort/collapse/etc from the previous project would leak into the next one.
+function resetUiStateToDefaults(){
+  calendarMode = 'roc';
+  ganttPxPerDay = 20;
+  sortColKey = null;
+  sortDir = 0;
+  wbsPanelWidthOverride = null;
+  collapsed = {};
+  hiddenIds = {};
+  const critOnlyEl = document.getElementById('critOnly');
+  if(critOnlyEl) critOnlyEl.checked = false;
+  const showBaselineEl = document.getElementById('showBaseline');
+  if(showBaselineEl) showBaselineEl.checked = true;
+  document.getElementById('eraROC').classList.toggle('active', true);
+  document.getElementById('eraAD').classList.toggle('active', false);
+  syncZoomButtonsActive();
+}
+// v多專案: no longer called unconditionally at script load — enterProject() calls
+// resetUiStateToDefaults() then this, once currentProjectId (and therefore storageKey()) is known.
 
 function renderTable(){
   const critOnly = document.getElementById('critOnly').checked;
@@ -4720,7 +4808,100 @@ function render(){
   updateChainBar();
   syncLegendColors(); // cheap — keeps the legend swatches from ever drifting out of sync with the chart
 }
-loadFromSheet();
+
+/* ---------- v多專案: home screen (project picker) ---------- */
+function showHomeScreen(){
+  document.getElementById('appScreen').style.display = 'none';
+  document.getElementById('homeScreen').style.display = '';
+  loadProjectList();
+}
+function goHome(){
+  if(dirty && !confirm('目前有尚未同步的變更，確定要返回首頁嗎？（變更不會遺失，下次進入這個專案仍會看到，建議先按 💾 同步）')) return;
+  showHomeScreen();
+}
+async function loadProjectList(){
+  const homeMsg = document.getElementById('homeMsg');
+  if(!SHEET_CONFIGURED){
+    projects = [{ id: DEFAULT_PROJECT_ID, name: projectName }];
+    renderHomeScreen();
+    return;
+  }
+  if(homeMsg) homeMsg.textContent = '載入專案清單中…';
+  try{
+    const res = await fetch(apiUrl({ list: 1 }), { method:'GET' });
+    const data = await res.json();
+    projects = (data && Array.isArray(data.projects) && data.projects.length)
+      ? data.projects
+      : [{ id: DEFAULT_PROJECT_ID, name: projectName }];
+    if(homeMsg) homeMsg.textContent = '';
+  }catch(err){
+    projects = [{ id: DEFAULT_PROJECT_ID, name: projectName }];
+    if(homeMsg) homeMsg.textContent = '無法連線到 Google Sheet，僅顯示預設專案（離線模式）';
+  }
+  renderHomeScreen();
+}
+function renderHomeScreen(){
+  const grid = document.getElementById('homeGrid');
+  if(!grid) return;
+  grid.innerHTML = '';
+  projects.forEach(p=>{
+    const card = document.createElement('div');
+    card.className = 'project-card';
+    card.title = '點一下進入這個專案';
+    card.onclick = ()=>enterProject(p.id);
+    card.innerHTML = `<div class="project-card-name">${escAttr(p.name || p.id)}</div>`;
+    grid.appendChild(card);
+  });
+  const addCard = document.createElement('div');
+  addCard.className = 'project-card add-new';
+  addCard.title = '建立一個新的專案（會在 Google Sheet 建立獨立的分頁，不影響其他專案）';
+  addCard.onclick = createProjectFlow;
+  addCard.innerHTML = '<div class="project-card-add-icon">＋</div><div>新增專案</div>';
+  grid.appendChild(addCard);
+}
+async function createProjectFlow(){
+  const name = prompt('請輸入新專案名稱：');
+  if(!name || !name.trim()) return;
+  if(!SHEET_CONFIGURED){ alert('尚未設定 Google Sheet 連線，無法建立新專案。'); return; }
+  const homeMsg = document.getElementById('homeMsg');
+  if(homeMsg) homeMsg.textContent = '建立專案中…';
+  try{
+    const res = await fetch(SHEET_API_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ token: API_TOKEN, action:'createProject', name: name.trim() }),
+    });
+    const data = await res.json();
+    if(data && data.ok && data.id){
+      projects.push({ id: data.id, name: data.name });
+      if(homeMsg) homeMsg.textContent = '';
+      enterProject(data.id);
+    } else {
+      if(homeMsg) homeMsg.textContent = '建立專案失敗：' + (data && data.error || '未知錯誤');
+    }
+  }catch(err){
+    if(homeMsg) homeMsg.textContent = '建立專案失敗（無法連線到 Google Sheet）';
+  }
+}
+function enterProject(id){
+  currentProjectId = id || DEFAULT_PROJECT_ID;
+  document.getElementById('homeScreen').style.display = 'none';
+  document.getElementById('appScreen').style.display = '';
+  // reset every per-browser display preference to its hardcoded default BEFORE restoring this specific
+  // project's own saved state — otherwise whatever project was open before would leak its column
+  // widths/zoom/sort/collapse-state into this one (see resetColumnLayoutToDefaults/resetUiStateToDefaults)
+  resetColumnLayoutToDefaults();
+  resetUiStateToDefaults();
+  const known = projects.find(p=>p.id===currentProjectId);
+  projectName = (known && known.name) ? known.name : document.getElementById('projectTitle').textContent;
+  applyProjectName();
+  applyStoredProjectNameOverride(); // a page-side rename (per project) still wins over the registry name above
+  loadColumnLayout();
+  loadUiState();
+  loadFromSheet();
+}
+
+showHomeScreen();
 </script>
 </body>
 </html>
