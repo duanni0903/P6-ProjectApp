@@ -1158,10 +1158,28 @@ function commitProjectNameEdit(input){
   if(!cancelled && v && v!==projectName){
     projectName = v;
     saveProjectNameOverride(v);
+    syncProjectNameToBackend(v);
   } // empty or Esc-cancelled edits are discarded — keep the previous name rather than leaving it blank
   const container = input.parentElement;
   if(!container) return;
   container.innerHTML = `<h1 id="projectTitle" onclick="startProjectNameEdit(event)" title="點一下修改專案名稱">${escAttr(projectName)}</h1>`;
+}
+// v專案改名同步：把改好的名稱同步寫回 Google Sheet 的「專案」註冊表（default 專案額外寫回「設定」
+// 分頁），這樣首頁卡片、以及其他裝置/瀏覽器重新整理後，都會看到同一個新名稱——不再只是這台瀏覽器
+// 自己的 localStorage 才知道。失敗(離線/連不到後端)就靜默放棄：名稱已經套用在畫面上也存進
+// localStorage 了，不影響這次編輯的使用體驗，只是跨裝置還沒同步，下次改名或重新整理再試即可。
+function syncProjectNameToBackend(name){
+  if(!SHEET_CONFIGURED) return;
+  fetch(SHEET_API_URL, {
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({ token: API_TOKEN, action:'renameProject', project: currentProjectId, name: name }),
+  }).then(r=>r.json()).then(data=>{
+    if(data && data.ok){
+      const p = projects.find(x=>x.id===currentProjectId);
+      if(p) p.name = data.name;
+    }
+  }).catch(()=>{});
 }
 
 let owners = [
