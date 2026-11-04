@@ -140,6 +140,8 @@
   .bar-fill{}
   .bar-outline-crit{stroke:var(--danger); stroke-width:1.6;}
   .summary-bar-shape{fill:var(--summary-bar);}
+  /* v66: 基準線 (baseline) bar — a thin muted bar under the live bar, frozen by 設定基準線 */
+  .baseline-bar{fill:var(--grey-bar-fill); opacity:.65;}
   .arrow-path{fill:none; stroke:#94a3b8; stroke-width:1.2;}
   .arrow-path.crit{stroke:var(--gantt-critical); stroke-width:1.3;}
   .axis-text{font-size:10.5px; fill:var(--text-dim); font-family:inherit;}
@@ -377,6 +379,8 @@
   <div class="toolbar">
     <button class="btn primary" onclick="quickAddTask()">＋ 新增任務</button>
     <button class="btn" onclick="openOwnerMgmt()" title="建立/編輯負責人名冊，之後在任務裡就能直接從清單挑選指派">👥 負責人管理</button>
+    <button class="btn" id="baselineBtn" onclick="setBaseline()" title="把目前的排程（含實際進度/順推結果）凍結成一條基準線，之後甘特圖會同時顯示基準線與最新排程，方便比對delay">📐 設定基準線</button>
+    <label class="toggle"><input type="checkbox" id="showBaseline" onchange="saveUiState(); render()" checked> 顯示基準線</label>
     <button class="btn" id="undoBtn" onclick="undo()" title="復原上一步變更（Ctrl+Z）" disabled>↶ 上一步</button>
     <button class="btn" id="redoBtn" onclick="redo()" title="重做（Ctrl+Shift+Z）" disabled>↷ 下一步</button>
     <label class="toggle"><input type="checkbox" id="critOnly" onchange="saveUiState(); render()"> 只顯示關鍵路徑</label>
@@ -468,6 +472,7 @@
     <div class="item"><span class="swatch" id="legendCritical" style="background:#dc2626"></span> 關鍵路徑</div>
     <div class="item"><span class="swatch diamond" id="legendMilestone" style="background:#d97706"></span> 里程碑</div>
     <div class="item"><span class="swatch" id="legendSummary" style="background:#334155"></span> 階段彙總</div>
+    <div class="item"><span class="swatch" style="background:#94a3b8; opacity:.65; height:5px"></span> 基準線</div>
     <div class="item"><button class="btn" id="legendColorBtn" onclick="openGanttColorDialog()" title="自訂甘特圖顏色" style="padding:2px 8px; font-size:11px; font-weight:600;">🎨 自訂顏色…</button></div>
   </div>
 
@@ -538,6 +543,20 @@
         <label>完成進度：<span id="progVal">0</span>%</label>
         <input type="range" id="f_progress" min="0" max="100" value="0" oninput="progVal.textContent=f_progress.value">
       </div>
+      <!-- v66: 實際開始/實際完成日 — optional, only filled in once a task genuinely starts/finishes in real
+      life. Leaving both blank keeps this task on the pure plan-based CPM calculation exactly as before
+      (see computeSchedule()'s forward pass) — these two fields are purely additive and never required. -->
+      <div class="field-row">
+        <div class="field">
+          <label>實際開始日（選填）</label>
+          <input type="date" id="f_actualStart">
+        </div>
+        <div class="field">
+          <label>實際完成日（選填）</label>
+          <input type="date" id="f_actualFinish">
+        </div>
+      </div>
+      <div class="hint" style="margin:-6px 0 2px">填了「實際開始日」但還沒填「實際完成日」：系統會把完成日預估改成「今天＋剩餘工期」（剩餘工期＝工期×(1-進度%)），往後任務會自動跟著順推。兩個都填：此任務時程完全鎖定為實際日期。</div>
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">取消</button>
@@ -1181,6 +1200,13 @@ function stripForSync(t){
     // predecessor-driven calculation. Only meaningful when milestone===true, but always sent/read the
     // same as every other field so it round-trips cleanly through undo/redo and the Google Sheet.
     constraintType: t.constraintType || '', constraintDate: t.constraintDate || '',
+    // v66: 實際開始/實際完成日 — true inputs, same as duration/progress above (see computeSchedule()'s
+    // forward pass). 基準線 (baselineStart/baselineEnd) is also a true input here even though it's a
+    // snapshot of a PAST computed startDate/endDate, not something typed in directly — once captured by
+    // setBaseline() it must round-trip through the Sheet and undo/redo exactly like any other saved
+    // field, never be recomputed/overwritten by computeSchedule() on a later load.
+    actualStart: t.actualStart || '', actualFinish: t.actualFinish || '',
+    baselineStart: t.baselineStart || '', baselineEnd: t.baselineEnd || '',
     // report-only columns for the Google Sheet (P6-style Activity table) — the app never reads these
     // back as input, it always recomputes the full schedule from duration+preds+parent on load
     earlyStart:isoDate(t.startDate), earlyFinish:isoDate(t.endDate),
@@ -1198,6 +1224,9 @@ function snapshotTasks(){
     duration:t.duration, responsible:t.responsible||'', budget:t.budget||0,
     actual:t.actual||0, progress:t.progress||0, milestone:!!t.milestone,
     constraintType: t.constraintType || '', constraintDate: t.constraintDate || '',
+    // v66: 實際開始/實際完成日 (user input) + 基準線 startDate/endDate snapshot (set by setBaseline())
+    actualStart: t.actualStart || '', actualFinish: t.actualFinish || '',
+    baselineStart: t.baselineStart || '', baselineEnd: t.baselineEnd || '',
     preds:(t.preds||[]).map(p=>({id:p.id, type:p.type, lag:p.lag||0})),
   }));
 }
@@ -1258,6 +1287,22 @@ function syncToSheet(){
   syncTimer = setTimeout(doSync, 500);
 }
 function manualSync(){ syncToSheet(); }
+// v66: 設定基準線 — freezes a copy of every task's CURRENT computed startDate/endDate (which already
+// reflects any 實際開始/進行中/已完成 順推 logic in computeSchedule()) into baselineStart/baselineEnd.
+// Captured once, those two fields never change again until this is run again — later edits only move
+// the live startDate/endDate, so the Gantt chart can draw both side by side (see renderGantt() below)
+// to compare "原計畫" against "目前最新排程（含實際進度/順推）".
+function setBaseline(){
+  if(!confirm('要把目前的排程設定為新的基準線嗎？\n\n這會覆蓋先前設定過的基準線（如果有的話），之後甘特圖會同時顯示這條基準線與最新排程，方便比對 delay。')) return;
+  const _pre = snapshotTasks();
+  computeSchedule(); // make sure every task's startDate/endDate reflects the very latest edits before freezing
+  tasks.forEach(t=>{
+    t.baselineStart = isoDate(t.startDate);
+    t.baselineEnd = isoDate(t.endDate);
+  });
+  render();
+  pushUndoSnapshot(_pre);
+}
 function doSync(){
   // owners' workload stats are already fresh (computeSchedule() calls computeOwners() on every render);
   // relationships is a pure derived snapshot built fresh here, never stored in a global
@@ -1347,6 +1392,8 @@ const COLUMN_META = {
   end:        {label:'最早完成', width:80},
   lateStart:  {label:'最晚開始', width:80},
   lateFinish: {label:'最晚完成', width:80},
+  actualStart:  {label:'實際開始', width:80},
+  actualFinish: {label:'實際完成', width:80},
   dur:        {label:'工期',   width:38},
   float:      {label:'浮時',   width:48},
   progress:   {label:'進度',   width:82},
@@ -1439,6 +1486,14 @@ function dayIndexOfIsoDate(iso){
   if(!m) return null;
   const dt = new Date(+m[1], +m[2]-1, +m[3]);
   return Math.round((dt - PROJECT_START) / 86400000);
+}
+// v66: formats a raw "YYYY-MM-DD" input string (實際開始/完成日) with the same ROC/西元 era toggle as
+// every other date in the table — routed through PROJECT_DAY_LIST so it stays on the exact same
+// local-time day-offset math as the rest of the app, same reasoning as dayIndexOfIsoDate() above.
+function fmtIsoRoc(iso){
+  const idx = dayIndexOfIsoDate(iso);
+  if(idx===null || !PROJECT_DAY_LIST[idx]) return '';
+  return fmtROC(PROJECT_DAY_LIST[idx]);
 }
 // dates can be displayed in either the ROC (Republic of China / Minguo) calendar or the
 // Gregorian (western/西元) calendar, toggled via the "民國 / 西元" buttons — setEra() below.
@@ -1769,6 +1824,10 @@ function computeSchedule(){
   }
   leaves.forEach(visit);
 
+  // v66: 資料日期 (Data Date) — fixed to "today", used only by the 實際開始/進行中 branch below to
+  // project a forecast finish (today + 剩餘工期) for a task that's started but not yet marked done.
+  const todayIdx = dayIndexOfIsoDate(isoDate(new Date()));
+
   // forward pass: unify every relationship type into a constraint on ES
   order.forEach(t=>{
     let es = 0;
@@ -1793,8 +1852,26 @@ function computeSchedule(){
       const idx = dayIndexOfIsoDate(t.constraintDate);
       if(idx!==null) es = idx;
     }
-    t.ES = Math.max(0, es);
-    t.EF = t.ES + t.duration;
+    // v66: 實際開始/實際完成日 — only tasks the user has explicitly marked as started/finished switch
+    // over to this branch; every task with neither field filled in keeps the exact plan-only behavior
+    // above (deliberate — avoids retroactively reshuffling a whole already-in-progress project the
+    // moment this feature ships, since "今天" wasn't a scheduling constraint before).
+    const actualStartIdx = dayIndexOfIsoDate(t.actualStart);
+    const actualFinishIdx = dayIndexOfIsoDate(t.actualFinish);
+    if(actualFinishIdx!==null){
+      // 已完成：完全鎖定在實際日期，不再參與前置任務推導的時程計算
+      t.ES = Math.max(0, actualStartIdx!==null ? actualStartIdx : actualFinishIdx);
+      t.EF = Math.max(t.ES, actualFinishIdx);
+    } else if(actualStartIdx!==null){
+      // 進行中：開始日鎖定，完成日改用「資料日期（今天）＋剩餘工期」預估，剩餘工期＝工期×(1-進度%)
+      const remaining = Math.max(0, Math.round(t.duration * (1 - (t.progress||0)/100)));
+      t.ES = Math.max(0, actualStartIdx);
+      t.EF = Math.max(t.ES, Math.max(todayIdx, actualStartIdx) + remaining);
+    } else {
+      // 未開始、無實際日期：維持原本純計畫式 CPM 計算，不受「今天」影響
+      t.ES = Math.max(0, es);
+      t.EF = t.ES + t.duration;
+    }
   });
   const projectDuration = Math.max(0, ...order.map(t=>t.EF));
 
@@ -1910,6 +1987,8 @@ function sortValue(key, t){
     case 'end': return t.endDate ? t.endDate.getTime() : 0;
     case 'lateStart': return t.lateStartDate ? t.lateStartDate.getTime() : 0;
     case 'lateFinish': return t.lateFinishDate ? t.lateFinishDate.getTime() : 0;
+    case 'actualStart': return t.actualStart || '';
+    case 'actualFinish': return t.actualFinish || '';
     case 'dur': return t.duration||0;
     case 'float': return t.float||0;
     case 'progress': return t.progress||0;
@@ -2021,6 +2100,8 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'end': return `<td>${fmtROC(t.endDate)}</td>`;
     case 'lateStart': return `<td>${(t.lateStartDate && !t.milestone)?fmtROC(t.lateStartDate):''}</td>`;
     case 'lateFinish': return `<td>${t.lateFinishDate?fmtROC(t.lateFinishDate):''}</td>`;
+    case 'actualStart': return `<td>${isSum?'':fmtIsoRoc(t.actualStart)}</td>`;
+    case 'actualFinish': return `<td>${isSum?'':fmtIsoRoc(t.actualFinish)}</td>`;
     case 'dur': {
       if(isSum) return '<td></td>';
       if(t.milestone) return `<td title="里程碑工期固定為 0 天">${t.duration}</td>`; // fixed at 0, not directly editable
@@ -2278,9 +2359,11 @@ const UI_STATE_STORAGE_KEY = 'p6lite_ui_state_v1';
 function saveUiState(){
   try{
     const critOnlyEl = document.getElementById('critOnly');
+    const showBaselineEl = document.getElementById('showBaseline');
     localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify({
       calendarMode, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride,
       critOnly: critOnlyEl ? critOnlyEl.checked : false,
+      showBaseline: showBaselineEl ? showBaselineEl.checked : true,
       collapsed, hiddenIds,
     }));
   }catch(err){
@@ -2306,6 +2389,8 @@ function loadUiState(){
     // DOM element (its checked state is read fresh from the DOM by renderTable()/renderGantt() etc.)
     const critOnlyEl = document.getElementById('critOnly');
     if(critOnlyEl && typeof saved.critOnly === 'boolean') critOnlyEl.checked = saved.critOnly;
+    const showBaselineEl = document.getElementById('showBaseline');
+    if(showBaselineEl && typeof saved.showBaseline === 'boolean') showBaselineEl.checked = saved.showBaseline;
     document.getElementById('eraROC').classList.toggle('active', calendarMode==='roc');
     document.getElementById('eraAD').classList.toggle('active', calendarMode==='ad');
     syncZoomButtonsActive();
@@ -3392,10 +3477,26 @@ function renderGantt(){
   }
 
   // bars
+  const showBaseline = document.getElementById('showBaseline').checked;
   let bars='';
   rows.forEach((t,i)=>{
     const y = headerH + i*rowH;
     const cy = y + rowH/2;
+    // v66: 基準線（Baseline）— a thin bar drawn beneath the live bar/summary shape, showing the frozen
+    // startDate/endDate captured by setBaseline(). A real-world delay shows up as a visible gap between
+    // this bar and the live one above it. Drawn here (before the leaf/summary/milestone branches below)
+    // so every row type gets it at the SAME offset from its own row center — dayIndexOfIsoDate() is used
+    // instead of `new Date(isoString)` to stay on the exact same local-time day-offset math as xOfDate()
+    // everywhere else in this function (parsing an ISO string with `new Date()` is UTC-based and can be
+    // off by a day from PROJECT_START's local-time construction, depending on the viewer's timezone).
+    if(showBaseline && t.baselineStart && t.baselineEnd){
+      const bsIdx = dayIndexOfIsoDate(t.baselineStart), beIdx = dayIndexOfIsoDate(t.baselineEnd);
+      if(bsIdx!==null && beIdx!==null){
+        const bx0 = bsIdx*pxPerDay, bx1 = (beIdx+1)*pxPerDay;
+        const bw = Math.max(3, bx1-bx0);
+        bars += `<rect class="baseline-bar" x="${bx0}" y="${cy+10}" width="${bw}" height="5" rx="2"></rect>`;
+      }
+    }
     if(hasKids(t)){
       const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
       const sa = gcShapeAttrs('summary');
@@ -3593,6 +3694,8 @@ function cellCopyValue(key, t){
     case 'end': return t.endDate ? fmtROC(t.endDate) : '';
     case 'lateStart': return (t.lateStartDate && !t.milestone) ? fmtROC(t.lateStartDate) : '';
     case 'lateFinish': return t.lateFinishDate ? fmtROC(t.lateFinishDate) : '';
+    case 'actualStart': return isSum ? '' : fmtIsoRoc(t.actualStart);
+    case 'actualFinish': return isSum ? '' : fmtIsoRoc(t.actualFinish);
     case 'dur': return isSum ? '' : String(t.duration!=null ? t.duration : '');
     case 'float': return isSum ? '' : String(t.float||0);
     case 'progress': return String(t.progress!=null ? t.progress : 0);
@@ -3841,6 +3944,7 @@ function ganttExportCss(){
   .bar-track{fill:#f1f5f9;}
   .bar-outline-crit{stroke:#dc2626; stroke-width:1.6;}
   .summary-bar-shape{fill:#334155;}
+  .baseline-bar{fill:#94a3b8; opacity:.65;}
   .arrow-path{fill:none; stroke:#94a3b8; stroke-width:1.2;}
   .arrow-path.crit{stroke:#dc2626; stroke-width:1.3;}
   .axis-text{font-size:${scaledFontPx(10.5)}px; fill:#64748b; font-family:inherit;}
@@ -4306,6 +4410,8 @@ function openAddModal(presetParent){
   document.getElementById('leafFields').style.display = 'block';
   document.getElementById('summaryNote').style.display = 'none';
   f_name.value=''; f_dur.value=5; f_dur.disabled=false; f_resp.value=''; f_budget.value=0; f_actual.value=0; f_progress.value=0; progVal.textContent=0; f_milestone.checked=false;
+  document.getElementById('f_actualStart').value = '';
+  document.getElementById('f_actualFinish').value = '';
   document.getElementById('f_constraintWrap').style.display = 'none';
   document.getElementById('f_constraintType').value = '';
   document.getElementById('f_constraintDate').value = '';
@@ -4329,6 +4435,8 @@ function openEditModal(id){
   if(!isSum){
     f_dur.value=t.duration; f_dur.disabled=false; f_resp.value=t.responsible||'';
     f_budget.value=t.budget||0; f_actual.value=t.actual||0; f_progress.value=t.progress||0; progVal.textContent=t.progress||0;
+    document.getElementById('f_actualStart').value = t.actualStart || '';
+    document.getElementById('f_actualFinish').value = t.actualFinish || '';
     f_milestone.checked = !!t.milestone;
     document.getElementById('f_constraintWrap').style.display = t.milestone ? 'block' : 'none';
     document.getElementById('f_constraintType').value = t.constraintType==='fixed' ? 'fixed' : '';
@@ -4429,6 +4537,14 @@ function saveTask(){
   const parent = parentVal===''? null : parentVal;
   const constraintType = (f_milestone.checked && document.getElementById('f_constraintType').value==='fixed') ? 'fixed' : '';
   const constraintDate = constraintType==='fixed' ? document.getElementById('f_constraintDate').value : '';
+  // v66: 實際開始/實際完成日 — both optional; if only 實際完成日 is filled in, treat the task as having
+  // started and finished the same day (no separate 實際開始日 input needed for a task done in one shot).
+  const actualStart = document.getElementById('f_actualStart').value || '';
+  const actualFinish = document.getElementById('f_actualFinish').value || '';
+  if(actualStart && actualFinish && actualFinish < actualStart){
+    alert('實際完成日不能早於實際開始日');
+    return;
+  }
   const _pre = snapshotTasks();
 
   if(editingId!=null){
@@ -4449,6 +4565,8 @@ function saveTask(){
       t.milestone = f_milestone.checked;
       t.constraintType = constraintType;
       t.constraintDate = constraintDate;
+      t.actualStart = actualStart;
+      t.actualFinish = actualFinish;
       t.preds = [...document.querySelectorAll('#f_preds .pred-chk:checked')].map(chk=>{
         const id = chk.getAttribute('data-id');
         const type = document.querySelector(`.pred-type[data-id="${id}"]`).value;
@@ -4470,7 +4588,7 @@ function saveTask(){
       return {id, type, lag};
     });
     if(parent!==null){ const pt = tasks.find(x=>x.id===parent); if(pt) demoteToSummary(pt); }
-    tasks.push({id:genNextId(), wbs:'', name, parent, duration, preds, responsible, budget, actual, progress, milestone, constraintType, constraintDate});
+    tasks.push({id:genNextId(), wbs:'', name, parent, duration, preds, responsible, budget, actual, progress, milestone, constraintType, constraintDate, actualStart, actualFinish});
     if(parent!==null) collapsed[parent] = false; // auto-expand so the new child is visible
   }
   closeModal();
