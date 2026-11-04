@@ -1394,6 +1394,8 @@ const COLUMN_META = {
   lateFinish: {label:'最晚完成', width:80},
   actualStart:  {label:'實際開始', width:80},
   actualFinish: {label:'實際完成', width:80},
+  baselineStart: {label:'基準線開始', width:86},
+  baselineEnd:   {label:'基準線完成', width:86},
   dur:        {label:'工期',   width:38},
   float:      {label:'浮時',   width:48},
   progress:   {label:'進度',   width:82},
@@ -1409,7 +1411,7 @@ const ACTIONS_COL_WIDTH = 126;
 let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden interleaved
 // parentRef / milestoneFlag are already visible another way (tree indentation / ◆ icon on the name),
 // so they start hidden to avoid clutter — everything else backend-side is shown by default.
-let columnHidden = { parentRef:true, milestoneFlag:true }; // key -> true when hidden
+let columnHidden = { parentRef:true, milestoneFlag:true, baselineStart:true, baselineEnd:true }; // key -> true when hidden; baseline 欄位預設隱藏（已有基準線比對功能可用 Gantt 圖上的「顯示基準線」勾選框呈現），需要的話可從 ▤ 列顯示 勾出來
 function visibleColumns(){ return columnOrder.filter(k=>!columnHidden[k]); }
 
 /* ---------- column layout persistence (order / visibility / width) ----------
@@ -1989,6 +1991,8 @@ function sortValue(key, t){
     case 'lateFinish': return t.lateFinishDate ? t.lateFinishDate.getTime() : 0;
     case 'actualStart': return t.actualStart || '';
     case 'actualFinish': return t.actualFinish || '';
+    case 'baselineStart': return t.baselineStart || '';
+    case 'baselineEnd': return t.baselineEnd || '';
     case 'dur': return t.duration||0;
     case 'float': return t.float||0;
     case 'progress': return t.progress||0;
@@ -2102,6 +2106,8 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'lateFinish': return `<td>${t.lateFinishDate?fmtROC(t.lateFinishDate):''}</td>`;
     case 'actualStart': return `<td>${isSum?'':fmtIsoRoc(t.actualStart)}</td>`;
     case 'actualFinish': return `<td>${isSum?'':fmtIsoRoc(t.actualFinish)}</td>`;
+    case 'baselineStart': return `<td>${isSum?'':fmtIsoRoc(t.baselineStart)}</td>`;
+    case 'baselineEnd': return `<td>${isSum?'':fmtIsoRoc(t.baselineEnd)}</td>`;
     case 'dur': {
       if(isSum) return '<td></td>';
       if(t.milestone) return `<td title="里程碑工期固定為 0 天">${t.duration}</td>`; // fixed at 0, not directly editable
@@ -3696,6 +3702,8 @@ function cellCopyValue(key, t){
     case 'lateFinish': return t.lateFinishDate ? fmtROC(t.lateFinishDate) : '';
     case 'actualStart': return isSum ? '' : fmtIsoRoc(t.actualStart);
     case 'actualFinish': return isSum ? '' : fmtIsoRoc(t.actualFinish);
+    case 'baselineStart': return isSum ? '' : fmtIsoRoc(t.baselineStart);
+    case 'baselineEnd': return isSum ? '' : fmtIsoRoc(t.baselineEnd);
     case 'dur': return isSum ? '' : String(t.duration!=null ? t.duration : '');
     case 'float': return isSum ? '' : String(t.float||0);
     case 'progress': return String(t.progress!=null ? t.progress : 0);
