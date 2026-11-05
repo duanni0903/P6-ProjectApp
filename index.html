@@ -358,21 +358,31 @@
   .export-menu-paper-size select{font-size:12px; padding:2px 4px; border-radius:5px; border:1px solid var(--border-dark); font-family:inherit;}
   /* ---------- home screen (multi-project picker) ---------- */
   .home-screen{max-width:960px; margin:40px auto; padding:0 20px 40px;}
-  .home-header{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px;}
+  .home-header{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px; gap:12px; flex-wrap:wrap;}
   .home-header h1{font-size:22px; margin:0;}
+  .home-show-hidden-toggle{font-size:13px; color:var(--text-dim); display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;}
   .home-msg{color:var(--text-dim); font-size:13px; min-height:18px; margin-bottom:12px;}
   .home-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(200px,1fr)); gap:14px;}
-  .project-card{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px 16px; cursor:pointer; min-height:88px; display:flex; align-items:center; justify-content:center; text-align:center; transition:border-color .15s, box-shadow .15s;}
+  .project-card{position:relative; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px 16px; cursor:pointer; min-height:88px; display:flex; align-items:center; justify-content:center; text-align:center; transition:border-color .15s, box-shadow .15s, opacity .15s;}
   .project-card:hover{border-color:var(--primary); box-shadow:0 2px 8px rgba(37,99,235,.12);}
   .project-card-name{font-size:15px; font-weight:600; color:var(--text);}
   .project-card.add-new{border-style:dashed; color:var(--text-dim); flex-direction:column; gap:4px;}
   .project-card.add-new:hover{color:var(--primary);}
   .project-card-add-icon{font-size:22px; line-height:1;}
+  /* v隱藏專案：每張卡片右上角的隱藏/取消隱藏按鈕，預設透明、hover 卡片時才顯示，避免首頁太雜亂；
+     已隱藏的專案（只有打開「顯示已隱藏的專案」才會出現）整張卡片半透明，按鈕常駐顯示方便點擊。 */
+  .project-card-hide-btn{position:absolute; top:6px; right:6px; font-size:11px; line-height:1.4; border:1px solid var(--border); background:var(--panel); color:var(--text-dim); border-radius:6px; padding:2px 7px; cursor:pointer; opacity:0; transition:opacity .15s; white-space:nowrap;}
+  .project-card:hover .project-card-hide-btn{opacity:1;}
+  .project-card.hidden-project{opacity:.5;}
+  .project-card.hidden-project .project-card-hide-btn{opacity:1; background:var(--primary); color:#fff; border-color:var(--primary);}
 </style>
 </head>
 <body>
 <div class="home-screen" id="homeScreen">
-  <div class="home-header"><h1>工程專案管理</h1></div>
+  <div class="home-header">
+    <h1>工程專案管理</h1>
+    <label class="home-show-hidden-toggle"><input type="checkbox" id="showHiddenToggle" onchange="toggleShowHiddenProjects()"> 顯示已隱藏的專案</label>
+  </div>
   <div class="home-msg" id="homeMsg"></div>
   <div class="home-grid" id="homeGrid"></div>
 </div>
@@ -754,12 +764,17 @@ const SHEET_CONFIGURED = !!SHEET_API_URL && SHEET_API_URL.indexOf('PASTE_') !== 
    scoped to it via storageKey()/apiUrl() below. */
 const DEFAULT_PROJECT_ID = 'default';
 let currentProjectId = null;
-let projects = []; // [{id, name, createdAt}, ...] — loaded from the backend's ?list=1 call
+let projects = []; // [{id, name, createdAt, hidden}, ...] — loaded from the backend's ?list=1 call
 // v專案改名同步: true only when `projects` reflects a successful ?list=1 fetch (the authoritative,
 // cross-device registry). false when SHEET_CONFIGURED is false or the fetch failed/offline — in that
 // case `projects` is just a single-entry placeholder, not real registry data. enterProject() uses this
 // to decide whether the registry name should win over a (possibly stale, pre-sync-era) local override.
 let projectsFromRegistry = false;
+// v隱藏專案：首頁「顯示已隱藏的專案」開關的狀態，存在 localStorage（跨分頁/重新整理記得住，但不會
+// 跟後端同步——這是「我現在想不想看到隱藏的卡片」這台瀏覽器自己的顯示偏好，不是專案本身的狀態）。
+let showHiddenProjects = (function(){
+  try { return localStorage.getItem('p6lite_show_hidden_projects_v1') === '1'; } catch (e) { return false; }
+})();
 function storageKey(baseKey){
   return (currentProjectId && currentProjectId !== DEFAULT_PROJECT_ID) ? (baseKey + '__' + currentProjectId) : baseKey;
 }
@@ -4869,13 +4884,30 @@ async function loadProjectList(){
 function renderHomeScreen(){
   const grid = document.getElementById('homeGrid');
   if(!grid) return;
+  const toggleEl = document.getElementById('showHiddenToggle');
+  if(toggleEl) toggleEl.checked = showHiddenProjects;
   grid.innerHTML = '';
   projects.forEach(p=>{
+    const isHidden = !!p.hidden;
+    if(isHidden && !showHiddenProjects) return; // 預設不顯示已隱藏的專案，打開開關才會列出來
     const card = document.createElement('div');
-    card.className = 'project-card';
-    card.title = '點一下進入這個專案';
+    card.className = 'project-card' + (isHidden ? ' hidden-project' : '');
+    card.title = isHidden ? '這個專案已隱藏（半透明顯示），點一下仍可進入' : '點一下進入這個專案';
     card.onclick = ()=>enterProject(p.id);
     card.innerHTML = `<div class="project-card-name">${escAttr(p.name || p.id)}</div>`;
+    const hideBtn = document.createElement('button');
+    hideBtn.type = 'button';
+    hideBtn.className = 'project-card-hide-btn';
+    if(isHidden){
+      hideBtn.textContent = '取消隱藏';
+      hideBtn.title = '取消隱藏這個專案，讓它重新出現在首頁';
+      hideBtn.onclick = (ev)=>{ ev.stopPropagation(); setProjectHiddenFlag(p.id, false); };
+    } else {
+      hideBtn.textContent = '✕';
+      hideBtn.title = '隱藏這個專案（不會刪除任何資料，只是首頁不再顯示這張卡片）';
+      hideBtn.onclick = (ev)=>{ ev.stopPropagation(); hideProjectPrompt(p.id, p.name || p.id); };
+    }
+    card.appendChild(hideBtn);
     grid.appendChild(card);
   });
   const addCard = document.createElement('div');
@@ -4884,6 +4916,44 @@ function renderHomeScreen(){
   addCard.onclick = createProjectFlow;
   addCard.innerHTML = '<div class="project-card-add-icon">＋</div><div>新增專案</div>';
   grid.appendChild(addCard);
+}
+// v隱藏專案：首頁「顯示已隱藏的專案」開關——純粹是這台瀏覽器的顯示偏好（存 localStorage），不會
+// 跟後端同步，也不影響任何專案本身是否隱藏的狀態。
+function toggleShowHiddenProjects(){
+  showHiddenProjects = !showHiddenProjects;
+  try { localStorage.setItem('p6lite_show_hidden_projects_v1', showHiddenProjects ? '1' : '0'); } catch (e) {}
+  renderHomeScreen();
+}
+function hideProjectPrompt(id, name){
+  if(!confirm('要隱藏專案「' + name + '」嗎？\n\n首頁之後不會再顯示這張卡片，但資料跟分頁完全不會被刪除——打開首頁的「顯示已隱藏的專案」開關就能找到並取消隱藏。')) return;
+  setProjectHiddenFlag(id, true);
+}
+// 隱藏/取消隱藏都走同一個函式：先樂觀更新畫面（讓使用者立刻看到卡片消失/變透明），再送 POST 同步到
+// 後端的「專案」註冊表；如果後端沒設定或同步失敗，把畫面狀態還原，避免這台瀏覽器看到的狀態跟其他
+// 裝置/瀏覽器（下次讀 ?list=1 時）不一致。
+async function setProjectHiddenFlag(id, hidden){
+  const p = projects.find(x=>x.id===id);
+  if(p) p.hidden = hidden;
+  renderHomeScreen();
+  if(!SHEET_CONFIGURED) return;
+  const homeMsg = document.getElementById('homeMsg');
+  try{
+    const res = await fetch(SHEET_API_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ token: API_TOKEN, action:'setProjectHidden', project: id, hidden: hidden }),
+    });
+    const data = await res.json();
+    if(!data || !data.ok){
+      if(p) p.hidden = !hidden;
+      renderHomeScreen();
+      if(homeMsg) homeMsg.textContent = (hidden ? '隱藏' : '取消隱藏') + '失敗：' + (data && data.error || '未知錯誤');
+    }
+  }catch(err){
+    if(p) p.hidden = !hidden;
+    renderHomeScreen();
+    if(homeMsg) homeMsg.textContent = (hidden ? '隱藏' : '取消隱藏') + '失敗（無法連線到 Google Sheet）';
+  }
 }
 async function createProjectFlow(){
   const name = prompt('請輸入新專案名稱：');
