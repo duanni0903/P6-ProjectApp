@@ -3741,7 +3741,7 @@ function renderGantt(){
     const ddx = xOfDate(DATA_DATE);
     dataDateLine = `<line class="data-date-line" x1="${ddx}" y1="${headerH}" x2="${ddx}" y2="${headerH+rows.length*rowH}"></line>`;
     dataDateFlag = `<polygon class="data-date-flag" points="${ddx},${headerH-16} ${ddx+9},${headerH-10} ${ddx},${headerH-4}"></polygon>` +
-      `<text class="data-date-label" x="${ddx+12}" y="${headerH-7}">資料日 DD</text>`;
+      `<text class="data-date-label" x="${ddx+12}" y="${headerH-7}">DD</text>`;
   }
 
   // v41: SVG <pattern> defs for the 斜線 (stripes) fill option — CSS backgrounds (used by the legend
