@@ -137,7 +137,6 @@
   .month-band{fill:#f8fafc;}
   .month-band.alt{fill:#eef2f7;}
   .grid-line{stroke:#eef1f5; stroke-width:1;}
-  .today-line{stroke:var(--primary); stroke-width:1.5; stroke-dasharray:3,3;}
   .data-date-line{stroke:#dc2626; stroke-width:2; stroke-dasharray:5,3;}
   .data-date-flag{fill:#dc2626;}
   .data-date-label{fill:#dc2626; font-size:10px; font-weight:600;}
@@ -3671,7 +3670,7 @@ function renderGantt(){
      different sizes next to each other ("一大一小"); only once even the smallest readable size still
      wouldn't fit the longest label is that row's labels omitted — the gridlines/bands themselves
      never disappear. */
-  // v63: bands/hlines/arrows/bars/todayLine stay body-only (unchanged coordinates, still offset by
+  // v63: bands/hlines/arrows/bars/dataDateLine stay body-only (unchanged coordinates, still offset by
   // headerH as before); gridLines is now split into headerGridLines (the middle-tier separator, confined
   // within the header's own y:[0,headerH] range) and bodyGridLines (the finest-tier day/week columns
   // running down through the task rows) — see the sticky-header split below for why.
@@ -3722,17 +3721,10 @@ function renderGantt(){
     hlines += `<line class="grid-line" x1="0" y1="${headerH+(i+1)*rowH}" x2="${width}" y2="${headerH+(i+1)*rowH}"></line>`;
   });
 
-  // today marker
-  const today = new Date(2026,8,2); // fixed "today" reference for consistent demo (2026-09-02)
-  let todayLine='';
-  if(today >= PROJECT_START){
-    const tx = xOfDate(today);
-    todayLine = `<line class="today-line" x1="${tx}" y1="${headerH}" x2="${tx}" y2="${headerH+rows.length*rowH}"></line>`;
-  }
-
-  // v資料日期: 資料日期 (Data Date) reference line — drawn in the body (full-height, red/dashed, same
-  // pattern as the today-line above) plus a small flag + label pinned in the sticky header so it stays
-  // visible while scrolling down through tasks. Gated on both the "顯示資料日期" toolbar toggle AND
+  // v資料日期: 資料日期 (Data Date) reference line — drawn in the body (full-height, red/dashed line)
+  // plus a small flag + label pinned in the sticky header so it stays visible while scrolling down
+  // through tasks. (Replaces the old hardcoded "today" reference line, removed since Data Date now
+  // serves that purpose.) Gated on both the "顯示資料日期" toolbar toggle AND
   // DATA_DATE actually being set (null = project has no data date configured yet) — purely a visual
   // reference, never used in computeSchedule()/CPM, so toggling it on/off never changes any task's dates.
   let dataDateLine='', dataDateFlag='';
@@ -3867,7 +3859,7 @@ function renderGantt(){
 
   // v63: split into a sticky header block (date axis — stays pinned to the top of #ganttPanel while
   // scrolling down through tasks, same idea as the WBS table's own `position:sticky` <thead>) and a
-  // separate body SVG (bars/arrows/gridlines/today-line) that scrolls normally underneath it. Both are
+  // separate body SVG (bars/arrows/gridlines/data-date-line) that scrolls normally underneath it. Both are
   // full-width children of #ganttWrap, so #ganttPanel's single scrollbar still moves them horizontally
   // in lockstep — `position:sticky` only pins the vertical axis, so that stays untouched.
   const headerSvg = `
@@ -3894,7 +3886,6 @@ function renderGantt(){
     ${hlines}
     ${arrows}
     ${bars}
-    ${todayLine}
     ${dataDateLine}
   </svg>`;
   document.getElementById('ganttWrap').innerHTML =
@@ -4233,7 +4224,6 @@ function ganttExportCss(){
   .month-band{fill:#f8fafc;}
   .month-band.alt{fill:#eef2f7;}
   .grid-line{stroke:#eef1f5; stroke-width:1;}
-  .today-line{stroke:#2563eb; stroke-width:1.5; stroke-dasharray:3,3;}
   .bar-track{fill:#f1f5f9;}
   .bar-outline-crit{stroke:#dc2626; stroke-width:1.6;}
   .summary-bar-shape{fill:#334155;}
