@@ -1389,8 +1389,14 @@ function stripForSync(t){
     actualStart: t.actualStart || '', actualFinish: t.actualFinish || '',
     baselineStart: t.baselineStart || '', baselineEnd: t.baselineEnd || '',
     // report-only columns for the Google Sheet (P6-style Activity table) — the app never reads these
-    // back as input, it always recomputes the full schedule from duration+preds+parent on load
-    earlyStart:isoDate(t.startDate), earlyFinish:isoDate(t.endDate),
+    // back as input, it always recomputes the full schedule from duration+preds+parent on load.
+    // v計畫時程: earlyStart/earlyFinish now report the 計畫 (plan) dates, matching what "最早開始/最早完成"
+    // means in the app itself after this change; forecastStart/forecastEnd is a NEW field reporting the
+    // 預估 (forecast) dates the app used to send here — harmless if Code.gs's COLUMNS whitelist doesn't
+    // know about it yet (an unlisted field is silently dropped on sync, never an error), but won't show
+    // up as its own column in the Sheet until Code.gs's COLUMNS array is updated to include it.
+    earlyStart:isoDate(t.planStartDate), earlyFinish:isoDate(t.planEndDate),
+    forecastStart:isoDate(t.startDate), forecastFinish:isoDate(t.endDate),
     lateStart:isoDate(t.lateStartDate), lateFinish:isoDate(t.lateFinishDate),
     float:t.float||0, diff:(t.budget||0)-(t.actual||0),
   };
@@ -1596,6 +1602,8 @@ const COLUMN_META = {
   resp:       {label:'負責人',  width:72},
   start:      {label:'最早開始', width:80},
   end:        {label:'最早完成', width:80},
+  forecastStart: {label:'預估開始', width:80},
+  forecastEnd:   {label:'預估完成', width:80},
   lateStart:  {label:'最晚開始', width:80},
   lateFinish: {label:'最晚完成', width:80},
   actualStart:  {label:'實際開始', width:80},
@@ -2064,9 +2072,12 @@ function computeSchedule(){
   }
   leaves.forEach(visit);
 
-  // v66: 資料日期 (Data Date) — fixed to "today", used only by the 實際開始/進行中 branch below to
-  // project a forecast finish (today + 剩餘工期) for a task that's started but not yet marked done.
-  const todayIdx = dayIndexOfIsoDate(isoDate(new Date()));
+  // v資料日期2: used only by the 實際開始/進行中 branch below to project a forecast finish
+  // (資料日期/今天 + 剩餘工期) for a task that's started but not yet marked done. Prefers the project's
+  // own 資料日期 (DATA_DATE) when one is set, so the forecast is pinned to that reporting-as-of date
+  // instead of drifting forward every single day with the real calendar — falls back to the real
+  // browser "today" when no 資料日期 has been configured yet (previous behavior, unchanged).
+  const todayIdx = DATA_DATE ? dayIndexOfIsoDate(isoDate(DATA_DATE)) : dayIndexOfIsoDate(isoDate(new Date()));
 
   // forward pass: unify every relationship type into a constraint on ES
   order.forEach(t=>{
@@ -2115,6 +2126,38 @@ function computeSchedule(){
   });
   const projectDuration = Math.max(0, ...order.map(t=>t.EF));
 
+  // v計畫時程: a SECOND, fully independent forward pass computing 計畫 (plan) ES/EF — the exact same
+  // predecessor/lag/milestone-fixed-constraint logic as the pass above, but NEVER branches on
+  // actualStart/actualFinish/progress at all, so it always reflects "what the schedule would be if
+  // nothing had actually happened yet". Deliberately chains off pred.planES/pred.planEF (not pred.ES/
+  // pred.EF from the forecast pass above) so an upstream task's real-world delay never leaks into this
+  // pass either — a late predecessor only pushes its SUCCESSOR's 預估 (forecast) dates, never its
+  // 最早開始/最早完成 (plan) dates. This feeds ONLY the 最早開始/最早完成 WBS columns (see colTdHtml/
+  // sortValue/cellCopyValue below) — the Gantt bar, 關鍵路徑/浮時/最晚開始/最晚完成, and 預計完工 統計 all
+  // keep reading the forecast ES/EF/LS/LF above, unchanged, since those need to reflect the live,
+  // actual-progress-aware schedule, not the frozen original plan.
+  order.forEach(t=>{
+    let es = 0;
+    (t.preds||[]).forEach(p=>{
+      const pred = byId[p.id]; if(!pred) return;
+      const lag = p.lag||0;
+      let c;
+      switch(p.type){
+        case 'SS': c = pred.planES + lag; break;
+        case 'FF': c = pred.planEF + lag - t.duration; break;
+        case 'SF': c = pred.planES + lag - t.duration; break;
+        default:   c = pred.planEF + lag; // FS
+      }
+      es = Math.max(es, c);
+    });
+    if(t.milestone && t.constraintType==='fixed' && t.constraintDate){
+      const idx = dayIndexOfIsoDate(t.constraintDate);
+      if(idx!==null) es = idx;
+    }
+    t.planES = Math.max(0, es);
+    t.planEF = t.planES + t.duration;
+  });
+
   // successor links (with type/lag) for the backward pass
   const succLinks = {}; order.forEach(t=>succLinks[t.id]=[]);
   order.forEach(t=>(t.preds||[]).forEach(p=>{ if(succLinks[p.id]) succLinks[p.id].push({succ:t, type:p.type, lag:p.lag||0}); }));
@@ -2145,6 +2188,10 @@ function computeSchedule(){
     // ES/EF/LS/LF are integer offsets from PROJECT_START, in calendar days — see PROJECT_DAY_LIST above.
     t.startDate = PROJECT_DAY_LIST[t.ES];
     t.endDate = PROJECT_DAY_LIST[Math.max(t.ES, t.EF-1)];
+    // v計畫時程: planES/planEF (from the second, actual-date-blind forward pass above) converted to
+    // calendar dates the same way — these feed ONLY the 最早開始/最早完成 WBS columns.
+    t.planStartDate = PROJECT_DAY_LIST[t.planES];
+    t.planEndDate = PROJECT_DAY_LIST[Math.max(t.planES, t.planEF-1)];
     // late-start/late-finish as actual calendar dates (LS/LF above are day-list-index numbers used
     // for the float math) — kept mainly so the Google Sheet sync (v19) can show P6-style Early/Late
     // Start/Finish date columns; not used anywhere else in the UI
@@ -2159,6 +2206,8 @@ function computeSchedule(){
     kids.forEach(k=>{ if(hasKids(k)) rollup(k); });
     s.startDate = new Date(Math.min(...kids.map(k=>k.startDate.getTime())));
     s.endDate = new Date(Math.max(...kids.map(k=>k.endDate.getTime())));
+    s.planStartDate = new Date(Math.min(...kids.map(k=>k.planStartDate.getTime())));
+    s.planEndDate = new Date(Math.max(...kids.map(k=>k.planEndDate.getTime())));
     s.budget = kids.reduce((a,k)=>a+(k.budget||0),0);
     s.actual = kids.reduce((a,k)=>a+(k.actual||0),0);
     const wsum = kids.reduce((a,k)=>a+(k.budget||0),0);
@@ -2227,8 +2276,10 @@ function sortValue(key, t){
     case 'wbs': return t.wbs||'';
     case 'name': return t.name||'';
     case 'resp': return t.responsible||'';
-    case 'start': return t.startDate ? t.startDate.getTime() : 0;
-    case 'end': return t.endDate ? t.endDate.getTime() : 0;
+    case 'start': return t.planStartDate ? t.planStartDate.getTime() : 0;
+    case 'end': return t.planEndDate ? t.planEndDate.getTime() : 0;
+    case 'forecastStart': return t.startDate ? t.startDate.getTime() : 0;
+    case 'forecastEnd': return t.endDate ? t.endDate.getTime() : 0;
     case 'lateStart': return t.lateStartDate ? t.lateStartDate.getTime() : 0;
     case 'lateFinish': return t.lateFinishDate ? t.lateFinishDate.getTime() : 0;
     case 'actualStart': return t.actualStart || '';
@@ -2341,9 +2392,11 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'resp': return `<td class="col-resp">${isSum?'':respSelectHtml(t)}</td>`;
     // v62: a milestone has no meaningful "start" separate from its completion date (duration is
     // always 0, so they're the same calendar day) — only the finish/completion date is shown, per
-    // the user's request; 最早開始/最晚開始 render blank for a milestone row.
-    case 'start': return `<td>${t.milestone ? '' : fmtROC(t.startDate)}</td>`;
-    case 'end': return `<td>${fmtROC(t.endDate)}</td>`;
+    // the user's request; 最早開始/預估開始/最晚開始 render blank for a milestone row.
+    case 'start': return `<td>${t.milestone ? '' : fmtROC(t.planStartDate)}</td>`;
+    case 'end': return `<td>${fmtROC(t.planEndDate)}</td>`;
+    case 'forecastStart': return `<td>${t.milestone ? '' : fmtROC(t.startDate)}</td>`;
+    case 'forecastEnd': return `<td>${fmtROC(t.endDate)}</td>`;
     case 'lateStart': return `<td>${(t.lateStartDate && !t.milestone)?fmtROC(t.lateStartDate):''}</td>`;
     case 'lateFinish': return `<td>${t.lateFinishDate?fmtROC(t.lateFinishDate):''}</td>`;
     case 'actualStart': return `<td>${isSum?'':fmtIsoRoc(t.actualStart)}</td>`;
@@ -3972,8 +4025,10 @@ function cellCopyValue(key, t){
     case 'wbs': return t.wbs||'';
     case 'name': return t.name||'';
     case 'resp': return isSum ? '' : (t.responsible||'');
-    case 'start': return (t.startDate && !t.milestone) ? fmtROC(t.startDate) : '';
-    case 'end': return t.endDate ? fmtROC(t.endDate) : '';
+    case 'start': return (t.planStartDate && !t.milestone) ? fmtROC(t.planStartDate) : '';
+    case 'end': return t.planEndDate ? fmtROC(t.planEndDate) : '';
+    case 'forecastStart': return (t.startDate && !t.milestone) ? fmtROC(t.startDate) : '';
+    case 'forecastEnd': return t.endDate ? fmtROC(t.endDate) : '';
     case 'lateStart': return (t.lateStartDate && !t.milestone) ? fmtROC(t.lateStartDate) : '';
     case 'lateFinish': return t.lateFinishDate ? fmtROC(t.lateFinishDate) : '';
     case 'actualStart': return isSum ? '' : fmtIsoRoc(t.actualStart);
