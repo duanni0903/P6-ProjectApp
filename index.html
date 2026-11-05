@@ -412,7 +412,7 @@
   <div class="toolbar">
     <button class="btn primary" onclick="quickAddTask()">＋ 新增任務</button>
     <button class="btn" onclick="openOwnerMgmt()" title="建立/編輯負責人名冊，之後在任務裡就能直接從清單挑選指派">👥 負責人管理</button>
-    <button class="btn" id="baselineBtn" onclick="setBaseline()" title="把目前的排程（含實際進度/順推結果）凍結成一條基準線，之後甘特圖會同時顯示基準線與最新排程，方便比對delay">📐 設定基準線</button>
+    <button class="btn" id="baselineBtn" onclick="setBaseline()" title="把目前的計畫時程（最早開始/最早完成，不含實際進度）凍結成一條基準線，之後甘特圖會同時顯示基準線與最新排程，方便比對delay">📐 設定基準線</button>
     <label class="toggle"><input type="checkbox" id="showBaseline" onchange="saveUiState(); render()" checked> 顯示基準線</label>
     <label class="toggle"><input type="checkbox" id="showDataDate" onchange="saveUiState(); render()" checked title="在甘特圖上顯示資料日期那條紅色參考線（純粹視覺標記，不影響排程計算）"> 顯示資料日期</label>
     <button class="btn" id="undoBtn" onclick="undo()" title="復原上一步變更（Ctrl+Z）" disabled>↶ 上一步</button>
@@ -1399,6 +1399,10 @@ function stripForSync(t){
     forecastStart:isoDate(t.startDate), forecastFinish:isoDate(t.endDate),
     lateStart:isoDate(t.lateStartDate), lateFinish:isoDate(t.lateFinishDate),
     float:t.float||0, diff:(t.budget||0)-(t.actual||0),
+    // v實際工期: report-only, same "harmless until Code.gs's COLUMNS knows about it" note as forecastStart/
+    // forecastFinish above — t.actualDuration is null (not 0) when not both actual dates are filled in,
+    // so `|| ''` sends an empty cell rather than a literal 0 for that case.
+    actualDuration: t.actualDuration || '',
   };
 }
 /* ---------- v39: undo/redo history + manual-only sync ----------
@@ -1474,18 +1478,22 @@ function syncToSheet(){
   syncTimer = setTimeout(doSync, 500);
 }
 function manualSync(){ syncToSheet(); }
-// v66: 設定基準線 — freezes a copy of every task's CURRENT computed startDate/endDate (which already
-// reflects any 實際開始/進行中/已完成 順推 logic in computeSchedule()) into baselineStart/baselineEnd.
-// Captured once, those two fields never change again until this is run again — later edits only move
-// the live startDate/endDate, so the Gantt chart can draw both side by side (see renderGantt() below)
-// to compare "原計畫" against "目前最新排程（含實際進度/順推）".
+// v66/v計畫時程2: 設定基準線 — freezes a copy of every task's CURRENT 計畫 (plan) ES/EF — planStartDate/
+// planEndDate from computeSchedule()'s actual-date-blind forward pass — into baselineStart/baselineEnd.
+// Captured once, those two fields never change again until this is run again, even as duration/
+// predecessor edits keep moving the live planStartDate/planEndDate afterwards — so the Gantt chart can
+// draw both side by side (see renderGantt() below) to compare "當初定案的計畫" against "目前最新排程（含
+// 實際進度/順推）". Deliberately uses PLAN, not 預估 (forecast) dates — a baseline is meant to represent
+// a point-in-time commitment to compare reality against, and 預估 already moves with real-world actual
+// progress, so basing the baseline on it would make the comparison compare forecast against forecast
+// instead of plan against reality.
 function setBaseline(){
-  if(!confirm('要把目前的排程設定為新的基準線嗎？\n\n這會覆蓋先前設定過的基準線（如果有的話），之後甘特圖會同時顯示這條基準線與最新排程，方便比對 delay。')) return;
+  if(!confirm('要把目前的計畫時程（最早開始/最早完成）設定為新的基準線嗎？\n\n這會覆蓋先前設定過的基準線（如果有的話），之後甘特圖會同時顯示這條基準線與最新排程，方便比對 delay。')) return;
   const _pre = snapshotTasks();
-  computeSchedule(); // make sure every task's startDate/endDate reflects the very latest edits before freezing
+  computeSchedule(); // make sure every task's planStartDate/planEndDate reflects the very latest edits before freezing
   tasks.forEach(t=>{
-    t.baselineStart = isoDate(t.startDate);
-    t.baselineEnd = isoDate(t.endDate);
+    t.baselineStart = isoDate(t.planStartDate);
+    t.baselineEnd = isoDate(t.planEndDate);
   });
   render();
   pushUndoSnapshot(_pre);
@@ -1608,6 +1616,7 @@ const COLUMN_META = {
   lateFinish: {label:'最晚完成', width:80},
   actualStart:  {label:'實際開始', width:80},
   actualFinish: {label:'實際完成', width:80},
+  actualDur:    {label:'實際工期', width:66},
   baselineStart: {label:'基準線開始', width:86},
   baselineEnd:   {label:'基準線完成', width:86},
   dur:        {label:'工期',   width:38},
@@ -2109,6 +2118,10 @@ function computeSchedule(){
     // moment this feature ships, since "今天" wasn't a scheduling constraint before).
     const actualStartIdx = dayIndexOfIsoDate(t.actualStart);
     const actualFinishIdx = dayIndexOfIsoDate(t.actualFinish);
+    // v實際工期: 實際完成－實際開始，以「頭尾都算進去」的方式計算天數（跟「工期」欄位的算法一致——工期
+    // 1 天代表開始跟完成是同一天，不是 0 天），只有兩個實際日期都填了才算得出來，只填實際開始、還在
+    // 進行中的任務這裡維持空白；純粹是給人看的統計欄位，不影響任何排程計算。
+    t.actualDuration = (actualStartIdx!==null && actualFinishIdx!==null) ? Math.max(1, actualFinishIdx - actualStartIdx + 1) : null;
     if(actualFinishIdx!==null){
       // 已完成：完全鎖定在實際日期，不再參與前置任務推導的時程計算
       t.ES = Math.max(0, actualStartIdx!==null ? actualStartIdx : actualFinishIdx);
@@ -2284,6 +2297,7 @@ function sortValue(key, t){
     case 'lateFinish': return t.lateFinishDate ? t.lateFinishDate.getTime() : 0;
     case 'actualStart': return t.actualStart || '';
     case 'actualFinish': return t.actualFinish || '';
+    case 'actualDur': return t.actualDuration||0;
     case 'baselineStart': return t.baselineStart || '';
     case 'baselineEnd': return t.baselineEnd || '';
     case 'dur': return t.duration||0;
@@ -2401,6 +2415,7 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'lateFinish': return `<td>${t.lateFinishDate?fmtROC(t.lateFinishDate):''}</td>`;
     case 'actualStart': return `<td>${isSum?'':fmtIsoRoc(t.actualStart)}</td>`;
     case 'actualFinish': return `<td>${isSum?'':fmtIsoRoc(t.actualFinish)}</td>`;
+    case 'actualDur': return `<td>${(isSum || t.actualDuration==null)?'':t.actualDuration}</td>`;
     case 'baselineStart': return `<td>${isSum?'':fmtIsoRoc(t.baselineStart)}</td>`;
     case 'baselineEnd': return `<td>${isSum?'':fmtIsoRoc(t.baselineEnd)}</td>`;
     case 'dur': {
@@ -3816,9 +3831,10 @@ function renderGantt(){
   rows.forEach((t,i)=>{
     const y = headerH + i*rowH;
     const cy = y + rowH/2;
-    // v66: 基準線（Baseline）— a thin bar drawn beneath the live bar/summary shape, showing the frozen
-    // startDate/endDate captured by setBaseline(). A real-world delay shows up as a visible gap between
-    // this bar and the live one above it. Drawn here (before the leaf/summary/milestone branches below)
+    // v66/v計畫時程2: 基準線（Baseline）— a thin bar drawn beneath the live bar/summary shape, showing the
+    // frozen planStartDate/planEndDate (pure plan, not forecast) captured by setBaseline(). A real-world
+    // delay shows up as a visible gap between this bar and the live (forecast) one above it. Drawn here
+    // (before the leaf/summary/milestone branches below)
     // so every row type gets it at the SAME offset from its own row center — dayIndexOfIsoDate() is used
     // instead of `new Date(isoString)` to stay on the exact same local-time day-offset math as xOfDate()
     // everywhere else in this function (parsing an ISO string with `new Date()` is UTC-based and can be
@@ -4033,6 +4049,7 @@ function cellCopyValue(key, t){
     case 'lateFinish': return t.lateFinishDate ? fmtROC(t.lateFinishDate) : '';
     case 'actualStart': return isSum ? '' : fmtIsoRoc(t.actualStart);
     case 'actualFinish': return isSum ? '' : fmtIsoRoc(t.actualFinish);
+    case 'actualDur': return (isSum || t.actualDuration==null) ? '' : String(t.actualDuration);
     case 'baselineStart': return isSum ? '' : fmtIsoRoc(t.baselineStart);
     case 'baselineEnd': return isSum ? '' : fmtIsoRoc(t.baselineEnd);
     case 'dur': return isSum ? '' : String(t.duration!=null ? t.duration : '');
