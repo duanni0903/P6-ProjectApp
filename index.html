@@ -138,6 +138,9 @@
   .month-band.alt{fill:#eef2f7;}
   .grid-line{stroke:#eef1f5; stroke-width:1;}
   .today-line{stroke:var(--primary); stroke-width:1.5; stroke-dasharray:3,3;}
+  .data-date-line{stroke:#dc2626; stroke-width:2; stroke-dasharray:5,3;}
+  .data-date-flag{fill:#dc2626;}
+  .data-date-label{fill:#dc2626; font-size:10px; font-weight:600;}
   .bar-track{fill:#f1f5f9;}
   .bar-fill{}
   .bar-outline-crit{stroke:var(--danger); stroke-width:1.6;}
@@ -412,6 +415,7 @@
     <button class="btn" onclick="openOwnerMgmt()" title="建立/編輯負責人名冊，之後在任務裡就能直接從清單挑選指派">👥 負責人管理</button>
     <button class="btn" id="baselineBtn" onclick="setBaseline()" title="把目前的排程（含實際進度/順推結果）凍結成一條基準線，之後甘特圖會同時顯示基準線與最新排程，方便比對delay">📐 設定基準線</button>
     <label class="toggle"><input type="checkbox" id="showBaseline" onchange="saveUiState(); render()" checked> 顯示基準線</label>
+    <label class="toggle"><input type="checkbox" id="showDataDate" onchange="saveUiState(); render()" checked title="在甘特圖上顯示資料日期那條紅色參考線（純粹視覺標記，不影響排程計算）"> 顯示資料日期</label>
     <button class="btn" id="undoBtn" onclick="undo()" title="復原上一步變更（Ctrl+Z）" disabled>↶ 上一步</button>
     <button class="btn" id="redoBtn" onclick="redo()" title="重做（Ctrl+Shift+Z）" disabled>↷ 下一步</button>
     <label class="toggle"><input type="checkbox" id="critOnly" onchange="saveUiState(); render()"> 只顯示關鍵路徑</label>
@@ -704,7 +708,7 @@
   </div>
 </div>
 
-<!-- v專案起始日: 每個專案各自獨立的「專案設定」小對話框，目前只有起始日一項，點標題旁邊的 ⚙️ 開啟。
+<!-- v專案起始日/v資料日期: 每個專案各自獨立的「專案設定」小對話框，點標題旁邊的 ⚙️ 開啟。
      見 openProjectSettingsDialog()/applyProjectSettingsDialog()。 -->
 <div class="overlay" id="projectSettingsOverlay">
   <div class="modal" style="width:420px">
@@ -715,6 +719,13 @@
       <div class="hint">整個專案排程（最早/最晚開始/完成）的起算點——改了之後，所有「用工期＋前置任務」
         算出來的排程日期會整個跟著移動。已經填了實際開始/完成日、或已經設定基準線的任務，那些日期是
         獨立存的，不會被這裡的設定影響。</div>
+    </div>
+    <div class="field">
+      <label>資料日期 Data Date</label>
+      <input type="date" id="projectDataDateInput">
+      <div class="hint">目前進度回報「以哪一天為準」的參考標記，會在甘特圖上畫一條紅色虛線（可以用
+        工具列的「顯示資料日期」開關隱藏），純粹視覺提示，不會動到任何排程計算。留空＝不設定，甘特
+        圖就不會畫這條線；要清除既有設定，把日期欄位清空後按確定即可。</div>
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeProjectSettingsDialog()">取消 Cancel</button>
@@ -870,6 +881,11 @@ function genNextId(){
 // false (no backend to read a real per-project value from) — kept at the app's original historical
 // anchor so nothing shifts for anyone who hasn't set up the backend.
 let PROJECT_START = new Date(2026, 8, 7); // 2026-09-07 (Mon)
+// v資料日期: this project's 資料日期 (P6 Data Date) — a pure VISUAL reference marker (drawn as a line on
+// the Gantt, see renderGantt()), never used in any CPM/schedule calculation. null means "not set" (the
+// line simply isn't drawn). Set from the backend's settings.dataDate every time a project loads/re-enters
+// (loadFromSheet()), or changed via the ⚙️ 專案設定 dialog (applyProjectSettingsDialog()).
+let DATA_DATE = null;
 let zoom = 'week'; // 'week' | 'month'
 // v30: continuous Gantt timescale zoom. ganttPxPerDay is the single source of truth for the
 // horizontal scale — every x-coordinate in renderGantt() is derived from it via xOfDate(), so
@@ -1241,6 +1257,9 @@ function syncProjectNameToBackend(name){
 // a project's stored startDate (persisted to the backend's 專案 registry via setProjectStartDate).
 function openProjectSettingsDialog(){
   document.getElementById('projectStartDateInput').value = fmtDateInputValue(PROJECT_START);
+  // v資料日期: DATA_DATE can be null ("not set") — leave the date input empty in that case rather than
+  // calling fmtDateInputValue(null), which would throw/produce garbage.
+  document.getElementById('projectDataDateInput').value = DATA_DATE ? fmtDateInputValue(DATA_DATE) : '';
   document.getElementById('projectSettingsOverlay').classList.add('open');
 }
 function closeProjectSettingsDialog(){
@@ -1250,10 +1269,20 @@ function applyProjectSettingsDialog(){
   const raw = document.getElementById('projectStartDateInput').value;
   const parsed = parseIsoDateLocal(raw);
   if(!parsed){ alert('請選擇一個有效的起始日。'); return; }
+  // v資料日期: unlike the start date, an empty value here is VALID — it means "clear the data date", not
+  // an error. Only a non-empty value that fails to parse is rejected.
+  const dataDateRaw = document.getElementById('projectDataDateInput').value;
+  let dataDateParsed = null;
+  if(dataDateRaw){
+    dataDateParsed = parseIsoDateLocal(dataDateRaw);
+    if(!dataDateParsed){ alert('資料日期格式不正確，請重新選擇，或留空清除。'); return; }
+  }
   setProjectStartAnchor(parsed);
-  render(); // recompute every task's ES/EF/LS/LF against the new anchor immediately
+  DATA_DATE = dataDateParsed; // null when cleared — renderGantt() simply won't draw the line
+  render(); // recompute every task's ES/EF/LS/LF against the new anchor immediately, and redraw the data-date line
   closeProjectSettingsDialog();
   syncProjectStartDateToBackend(raw);
+  syncProjectDataDateToBackend(dataDateRaw); // '' when cleared — backend treats that as "clear the field"
 }
 // 同步起始日到後端（跟 syncProjectNameToBackend 一樣的 fire-and-forget 模式）：畫面已經套用新起始日、
 // 排程也已經照新日期重算過了，不等這個 POST 的結果——離線/失敗就靜默放棄，這台瀏覽器下次重新整理或
@@ -1264,6 +1293,16 @@ function syncProjectStartDateToBackend(isoDate){
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},
     body: JSON.stringify({ token: API_TOKEN, action:'setProjectStartDate', project: currentProjectId, startDate: isoDate }),
+  }).catch(()=>{});
+}
+// 同步資料日期到後端，跟 syncProjectStartDateToBackend 完全同一套 fire-and-forget 模式——差別只在
+// isoDateOrEmpty 可以是空字串（清除這個欄位），後端的 setProjectDataDate 動作本來就接受這個情況。
+function syncProjectDataDateToBackend(isoDateOrEmpty){
+  if(!SHEET_CONFIGURED) return;
+  fetch(SHEET_API_URL, {
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({ token: API_TOKEN, action:'setProjectDataDate', project: currentProjectId, dataDate: isoDateOrEmpty }),
   }).catch(()=>{});
 }
 
@@ -1494,6 +1533,11 @@ async function loadFromSheet(){
     // show a schedule anchored "close enough" than to silently use some other arbitrary fallback here.
     const startDateParsed = data && data.settings && parseIsoDateLocal(data.settings.startDate);
     if(startDateParsed) setProjectStartAnchor(startDateParsed);
+    // v資料日期: a pure display reference, not a schedule anchor — unlike startDate, an empty/missing
+    // value here is the NORMAL "not set" case, not something to fall back on. Explicitly reset to null
+    // (rather than leaving the previous project's DATA_DATE lingering) so switching projects can't leak
+    // one project's data-date line into another's Gantt chart.
+    DATA_DATE = (data && data.settings && parseIsoDateLocal(data.settings.dataDate)) || null;
     const taskData = data && Array.isArray(data.tasks) ? data.tasks : null;
     if(taskData && taskData.length){
       // ids/parent/preds[].id always travel as strings inside the app (see genNextId() above) —
@@ -1532,8 +1576,9 @@ async function loadFromSheet(){
     }
   }catch(err){
     // same cross-project leak risk as above applies to a failed fetch — clear rather than keep showing
-    // whatever project happened to be in memory before this call.
-    tasks = []; owners = []; idCounter = 0;
+    // whatever project happened to be in memory before this call. DATA_DATE included (never got assigned
+    // this call since the fetch itself failed before settings.dataDate could be read).
+    tasks = []; owners = []; idCounter = 0; DATA_DATE = null;
     selectedId = null; clipboardId = null; multiSelectIds = [];
     setSyncStatus('error', '無法連線到 Google Sheet（離線模式）');
   }
@@ -2564,10 +2609,12 @@ function saveUiState(){
   try{
     const critOnlyEl = document.getElementById('critOnly');
     const showBaselineEl = document.getElementById('showBaseline');
+    const showDataDateEl = document.getElementById('showDataDate');
     localStorage.setItem(storageKey(UI_STATE_STORAGE_KEY), JSON.stringify({
       calendarMode, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride,
       critOnly: critOnlyEl ? critOnlyEl.checked : false,
       showBaseline: showBaselineEl ? showBaselineEl.checked : true,
+      showDataDate: showDataDateEl ? showDataDateEl.checked : true,
       collapsed, hiddenIds,
     }));
   }catch(err){
@@ -2595,6 +2642,8 @@ function loadUiState(){
     if(critOnlyEl && typeof saved.critOnly === 'boolean') critOnlyEl.checked = saved.critOnly;
     const showBaselineEl = document.getElementById('showBaseline');
     if(showBaselineEl && typeof saved.showBaseline === 'boolean') showBaselineEl.checked = saved.showBaseline;
+    const showDataDateEl = document.getElementById('showDataDate');
+    if(showDataDateEl && typeof saved.showDataDate === 'boolean') showDataDateEl.checked = saved.showDataDate;
     document.getElementById('eraROC').classList.toggle('active', calendarMode==='roc');
     document.getElementById('eraAD').classList.toggle('active', calendarMode==='ad');
     syncZoomButtonsActive();
@@ -2617,6 +2666,8 @@ function resetUiStateToDefaults(){
   if(critOnlyEl) critOnlyEl.checked = false;
   const showBaselineEl = document.getElementById('showBaseline');
   if(showBaselineEl) showBaselineEl.checked = true;
+  const showDataDateEl = document.getElementById('showDataDate');
+  if(showDataDateEl) showDataDateEl.checked = true;
   document.getElementById('eraROC').classList.toggle('active', true);
   document.getElementById('eraAD').classList.toggle('active', false);
   syncZoomButtonsActive();
@@ -3679,6 +3730,20 @@ function renderGantt(){
     todayLine = `<line class="today-line" x1="${tx}" y1="${headerH}" x2="${tx}" y2="${headerH+rows.length*rowH}"></line>`;
   }
 
+  // v資料日期: 資料日期 (Data Date) reference line — drawn in the body (full-height, red/dashed, same
+  // pattern as the today-line above) plus a small flag + label pinned in the sticky header so it stays
+  // visible while scrolling down through tasks. Gated on both the "顯示資料日期" toolbar toggle AND
+  // DATA_DATE actually being set (null = project has no data date configured yet) — purely a visual
+  // reference, never used in computeSchedule()/CPM, so toggling it on/off never changes any task's dates.
+  let dataDateLine='', dataDateFlag='';
+  const showDataDateEl = document.getElementById('showDataDate');
+  if(DATA_DATE && (!showDataDateEl || showDataDateEl.checked) && DATA_DATE >= PROJECT_START){
+    const ddx = xOfDate(DATA_DATE);
+    dataDateLine = `<line class="data-date-line" x1="${ddx}" y1="${headerH}" x2="${ddx}" y2="${headerH+rows.length*rowH}"></line>`;
+    dataDateFlag = `<polygon class="data-date-flag" points="${ddx},${headerH-16} ${ddx+9},${headerH-10} ${ddx},${headerH-4}"></polygon>` +
+      `<text class="data-date-label" x="${ddx+12}" y="${headerH-7}">資料日 DD</text>`;
+  }
+
   // v41: SVG <pattern> defs for the 斜線 (stripes) fill option — CSS backgrounds (used by the legend
   // swatches and the WBS table's progress cell, see cssPatternBackground()) don't apply to SVG shapes,
   // so the Gantt chart's own bars/milestones/summary shapes need real <pattern> elements instead.
@@ -3810,6 +3875,7 @@ function renderGantt(){
     <rect x="0" y="0" width="${width}" height="${headerH}" fill="#f8fafc"></rect>
     ${headerGridLines}
     ${monthLabels}
+    ${dataDateFlag}
   </svg>`;
   const zoomHandle = `
   <div class="gantt-zoom-handle${ganttZoomDragging?' dragging':''}" style="width:${width}px; height:${headerH}px;"
@@ -3829,6 +3895,7 @@ function renderGantt(){
     ${arrows}
     ${bars}
     ${todayLine}
+    ${dataDateLine}
   </svg>`;
   document.getElementById('ganttWrap').innerHTML =
     `<div class="gantt-header-sticky" id="ganttHeaderSticky">${headerSvg}${zoomHandle}</div>${bodySvg}`;
