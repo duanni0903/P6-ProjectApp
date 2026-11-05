@@ -27,6 +27,8 @@
   .titlebar h1#projectTitle{cursor:text; border-radius:5px; padding:1px 5px; margin:-1px -5px;}
   .titlebar h1#projectTitle:hover{background:var(--accent-dim, rgba(90,140,255,.14)); box-shadow:inset 0 0 0 1px var(--accent, #5a8cff);}
   .project-name-edit-input{font-size:20px; font-weight:700; font-family:inherit; padding:1px 4px; border:1px solid var(--accent, #5a8cff); border-radius:5px; background:var(--panel); color:var(--text); min-width:260px;}
+  .project-settings-btn{border:none; background:transparent; cursor:pointer; font-size:15px; line-height:1; padding:2px 4px; border-radius:5px; opacity:.55; align-self:center;}
+  .project-settings-btn:hover{opacity:1; background:var(--accent-dim, rgba(90,140,255,.14));}
   .titlebar .sub{color:var(--text-dim); font-size:12.5px;}
   .badge-demo{display:inline-block; margin-left:8px; padding:2px 8px; border-radius:999px; background:#eef2ff; color:var(--primary-dark); font-size:11px; font-weight:600; vertical-align:middle;}
 
@@ -389,8 +391,9 @@
 <div class="app" id="appScreen" style="display:none">
 
   <div class="titlebar">
-    <div>
+    <div style="display:flex; align-items:baseline; gap:4px;">
       <h1 id="projectTitle" onclick="startProjectNameEdit(event)" title="點一下修改專案名稱">大安區OO商辦大樓新建工程</h1>
+      <button class="project-settings-btn" onclick="openProjectSettingsDialog()" title="專案設定（起始日等）">⚙️</button>
     </div>
     <div style="text-align:right">
       <div class="sub" id="metaLine"></div>
@@ -701,6 +704,25 @@
   </div>
 </div>
 
+<!-- v專案起始日: 每個專案各自獨立的「專案設定」小對話框，目前只有起始日一項，點標題旁邊的 ⚙️ 開啟。
+     見 openProjectSettingsDialog()/applyProjectSettingsDialog()。 -->
+<div class="overlay" id="projectSettingsOverlay">
+  <div class="modal" style="width:420px">
+    <h2>專案設定</h2>
+    <div class="field">
+      <label>專案起始日 Project Start Date</label>
+      <input type="date" id="projectStartDateInput">
+      <div class="hint">整個專案排程（最早/最晚開始/完成）的起算點——改了之後，所有「用工期＋前置任務」
+        算出來的排程日期會整個跟著移動。已經填了實際開始/完成日、或已經設定基準線的任務，那些日期是
+        獨立存的，不會被這裡的設定影響。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeProjectSettingsDialog()">取消 Cancel</button>
+      <button class="btn primary" onclick="applyProjectSettingsDialog()">確定 OK</button>
+    </div>
+  </div>
+</div>
+
 <!-- v40/v42: right-click anywhere in the Gantt chart body (bars/rows — not the date-header handle,
      which keeps its own separate Timescale menu above) opens this tiny menu: one item opens the color
      customization dialog below, the other is a checkbox-style toggle for the dependency-relationship
@@ -841,7 +863,13 @@ function genNextId(){
   return candidate;
 }
 
-const PROJECT_START = new Date(2026, 8, 7); // 2026-09-07 (Mon)
+// v專案起始日: PROJECT_START used to be a single hardcoded constant shared by every project. It's now
+// per-project — loadFromSheet() overwrites it (via setProjectStartAnchor() near PROJECT_DAY_LIST below)
+// from the backend's settings.startDate every time a project's data is loaded/re-entered. This value
+// here is only the STARTUP fallback, used before any project has loaded yet and when SHEET_CONFIGURED is
+// false (no backend to read a real per-project value from) — kept at the app's original historical
+// anchor so nothing shifts for anyone who hasn't set up the backend.
+let PROJECT_START = new Date(2026, 8, 7); // 2026-09-07 (Mon)
 let zoom = 'week'; // 'week' | 'month'
 // v30: continuous Gantt timescale zoom. ganttPxPerDay is the single source of truth for the
 // horizontal scale — every x-coordinate in renderGantt() is derived from it via xOfDate(), so
@@ -1182,7 +1210,12 @@ function commitProjectNameEdit(input){
   } // empty or Esc-cancelled edits are discarded — keep the previous name rather than leaving it blank
   const container = input.parentElement;
   if(!container) return;
-  container.innerHTML = `<h1 id="projectTitle" onclick="startProjectNameEdit(event)" title="點一下修改專案名稱">${escAttr(projectName)}</h1>`;
+  // v專案起始日: the ⚙️ 專案設定 button lives as a sibling of the <h1> inside this same container (see
+  // the titlebar markup) — this restore has to re-include it too, or it would silently disappear the
+  // first time anyone renames the project (this innerHTML swap replaces the WHOLE container, not just
+  // the <h1>).
+  container.innerHTML = `<h1 id="projectTitle" onclick="startProjectNameEdit(event)" title="點一下修改專案名稱">${escAttr(projectName)}</h1>` +
+    `<button class="project-settings-btn" onclick="openProjectSettingsDialog()" title="專案設定（起始日等）">⚙️</button>`;
 }
 // v專案改名同步：把改好的名稱同步寫回 Google Sheet 的「專案」註冊表（default 專案額外寫回「設定」
 // 分頁），這樣首頁卡片、以及其他裝置/瀏覽器重新整理後，都會看到同一個新名稱——不再只是這台瀏覽器
@@ -1199,6 +1232,38 @@ function syncProjectNameToBackend(name){
       const p = projects.find(x=>x.id===currentProjectId);
       if(p) p.name = data.name;
     }
+  }).catch(()=>{});
+}
+
+/* ---------- v專案起始日: per-project 專案設定 dialog (currently just the start-date anchor) ---------- */
+// opened from the ⚙️ button next to the project title; PROJECT_START itself is set per-project by
+// loadFromSheet()/setProjectStartAnchor() above — this dialog is purely the user-facing way to CHANGE
+// a project's stored startDate (persisted to the backend's 專案 registry via setProjectStartDate).
+function openProjectSettingsDialog(){
+  document.getElementById('projectStartDateInput').value = fmtDateInputValue(PROJECT_START);
+  document.getElementById('projectSettingsOverlay').classList.add('open');
+}
+function closeProjectSettingsDialog(){
+  document.getElementById('projectSettingsOverlay').classList.remove('open');
+}
+function applyProjectSettingsDialog(){
+  const raw = document.getElementById('projectStartDateInput').value;
+  const parsed = parseIsoDateLocal(raw);
+  if(!parsed){ alert('請選擇一個有效的起始日。'); return; }
+  setProjectStartAnchor(parsed);
+  render(); // recompute every task's ES/EF/LS/LF against the new anchor immediately
+  closeProjectSettingsDialog();
+  syncProjectStartDateToBackend(raw);
+}
+// 同步起始日到後端（跟 syncProjectNameToBackend 一樣的 fire-and-forget 模式）：畫面已經套用新起始日、
+// 排程也已經照新日期重算過了，不等這個 POST 的結果——離線/失敗就靜默放棄，這台瀏覽器下次重新整理或
+// 再開一次這個對話框確定一次，仍會再送一次，不影響這次編輯的使用體驗。
+function syncProjectStartDateToBackend(isoDate){
+  if(!SHEET_CONFIGURED) return;
+  fetch(SHEET_API_URL, {
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({ token: API_TOKEN, action:'setProjectStartDate', project: currentProjectId, startDate: isoDate }),
   }).catch(()=>{});
 }
 
@@ -1421,6 +1486,14 @@ async function loadFromSheet(){
       projectName = data.settings.projectName.trim();
       applyProjectName();
     }
+    // v專案起始日: each project now carries its own start-date anchor in data.settings.startDate (see
+    // Code.gs's readSettingsForProject_()) — apply it BEFORE any task data is processed/rendered below,
+    // since every task's computed ES/EF/LS/LF depends on PROJECT_DAY_LIST being built from the RIGHT
+    // project's anchor. Falls back to leaving PROJECT_START as whatever it already was (the previous
+    // project's anchor, or the startup default) if the backend didn't send a parseable date — better to
+    // show a schedule anchored "close enough" than to silently use some other arbitrary fallback here.
+    const startDateParsed = data && data.settings && parseIsoDateLocal(data.settings.startDate);
+    if(startDateParsed) setProjectStartAnchor(startDateParsed);
     const taskData = data && Array.isArray(data.tasks) ? data.tasks : null;
     if(taskData && taskData.length){
       // ids/parent/preds[].id always travel as strings inside the app (see genNextId() above) —
@@ -1580,7 +1653,26 @@ function buildCalendarDayList(startDate, count){
   for(let i=0;i<count;i++){ list.push(new Date(d)); d.setDate(d.getDate()+1); }
   return list;
 }
-const PROJECT_DAY_LIST = buildCalendarDayList(PROJECT_START, 3650); // ~10 years of headroom — a long dependency chain (e.g. many tasks each tens/hundreds of days) can push a schedule's EF well past day 600 even with no single oversized duration; running out of precomputed days here silently produced undefined dates that crashed rollup()/.getTime() downstream
+let PROJECT_DAY_LIST = buildCalendarDayList(PROJECT_START, 3650); // ~10 years of headroom — a long dependency chain (e.g. many tasks each tens/hundreds of days) can push a schedule's EF well past day 600 even with no single oversized duration; running out of precomputed days here silently produced undefined dates that crashed rollup()/.getTime() downstream
+// v專案起始日: switches the project's day-0 anchor and rebuilds the derived day list to match — called
+// whenever a project is loaded/re-entered (loadFromSheet(), from the backend's settings.startDate) or
+// when the user changes it via the ⚙️ 專案設定 dialog (applyProjectSettingsDialog()). Every ES/EF/LS/LF
+// in the app is an INTEGER OFFSET into PROJECT_DAY_LIST, never an absolute date computed independently,
+// so rebuilding the list here is the only place this needs to happen — everything downstream (CPM via
+// computeSchedule(), the Gantt, stats) re-derives its dates from PROJECT_DAY_LIST on the next render().
+function setProjectStartAnchor(d){
+  if(!(d instanceof Date) || isNaN(d.getTime())) return;
+  PROJECT_START = d;
+  PROJECT_DAY_LIST = buildCalendarDayList(PROJECT_START, 3650);
+}
+// v專案起始日: parses a "YYYY-MM-DD" string the same local-time way as tsSetStartDate()/dayIndexOfIsoDate()
+// above (never `new Date('YYYY-MM-DD')`, which parses as UTC midnight and can land on the wrong calendar
+// day depending on the viewer's timezone). Returns null for anything that doesn't match.
+function parseIsoDateLocal(iso){
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso||'');
+  if(!m) return null;
+  return new Date(+m[1], +m[2]-1, +m[3]);
+}
 // v62: parses a "YYYY-MM-DD" <input type="date"> value into a PROJECT_DAY_LIST index — the same
 // local-time (not UTC) construction convention already used by tsSetStartDate() above, to avoid the
 // day-shift pitfall of `new Date('YYYY-MM-DD')` (which parses as UTC midnight). Returns null for an
