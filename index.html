@@ -4562,8 +4562,14 @@ ${exportGanttHtml()}
   var targetW = ((${pageMM.w} - ${EXPORT_PAGE_MARGIN_MM * 2}) * mmToPx - bodyPad * 2) * 0.99;
   var targetH = ((${pageMM.h} - ${EXPORT_PAGE_MARGIN_MM * 2}) * mmToPx - bodyPad * 2) * 0.99;
   var w = root.scrollWidth, h = root.scrollHeight;
-  var scale = Math.min(1, targetW / w, targetH / h);
-  if(scale < 1){
+  // v66: per user request, fill the page proportionally when the content is SMALLER than the printable
+  // area too (scale UP), not just shrink it when too big — "盡量依比例，填滿整個A3，除非項目太多超過界線".
+  // Dropping the old Math.min(1, ...) floor lets scale exceed 1; min(targetW/w, targetH/h) on its own
+  // already preserves the aspect ratio and guarantees neither dimension ever overflows the page, so a
+  // long/wide task list that needs shrinking behaves exactly as before — only a short list that used to
+  // print small in the corner now scales up to use the whole page.
+  var scale = Math.min(targetW / w, targetH / h);
+  if(Math.abs(scale - 1) > 0.001){
     root.style.width = w + 'px';
     root.style.transformOrigin = 'top left';
     root.style.transform = 'scale(' + scale + ')';
@@ -4819,8 +4825,14 @@ ${msLegendHtml(list.length + ' 個里程碑')}
   var targetW = ((${pageMM.w} - ${EXPORT_PAGE_MARGIN_MM * 2}) * mmToPx - bodyPad * 2) * 0.99;
   var targetH = ((${pageMM.h} - ${EXPORT_PAGE_MARGIN_MM * 2}) * mmToPx - bodyPad * 2) * 0.99;
   var w = root.scrollWidth, h = root.scrollHeight;
-  var scale = Math.min(1, targetW / w, targetH / h);
-  if(scale < 1){
+  // v66: per user request, fill the page proportionally when the content is SMALLER than the printable
+  // area too (scale UP), not just shrink it when too big — "盡量依比例，填滿整個A3，除非項目太多超過界線".
+  // Dropping the old Math.min(1, ...) floor lets scale exceed 1; min(targetW/w, targetH/h) on its own
+  // already preserves the aspect ratio and guarantees neither dimension ever overflows the page, so a
+  // long/wide task list that needs shrinking behaves exactly as before — only a short list that used to
+  // print small in the corner now scales up to use the whole page.
+  var scale = Math.min(targetW / w, targetH / h);
+  if(Math.abs(scale - 1) > 0.001){
     root.style.width = w + 'px';
     root.style.transformOrigin = 'top left';
     root.style.transform = 'scale(' + scale + ')';
