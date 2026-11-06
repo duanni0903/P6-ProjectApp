@@ -59,18 +59,28 @@
   .zoombtns button + button{border-left:1px solid var(--border-dark);}
 
   /* main split panel */
+  :root{ --board-max-h: 620px; }
   .board{display:flex; position:relative; background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.03);}
   .board-loading-overlay{position:absolute; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.78); color:var(--text-dim); font-size:14px; font-weight:600;}
-  .wbs-panel{width:932px; flex:none; overflow:auto; max-height:620px;}
-  .gantt-panel{flex:1; overflow:auto; max-height:620px; position:relative; min-width:120px;}
+  .wbs-panel{width:932px; flex:none; overflow:auto; max-height:var(--board-max-h, 620px);}
+  .gantt-panel{flex:1; overflow:auto; max-height:var(--board-max-h, 620px); position:relative; min-width:120px;}
   /* drag handle between the WBS table and the Gantt chart — lets the user manually resize how
      much horizontal space each side gets (independent of the WBS table's own column widths,
      which otherwise auto-size the panel to fit exactly). Double-click resets to auto-fit. */
-  .board-splitter{flex:none; width:9px; max-height:620px; cursor:col-resize; position:relative;
+  .board-splitter{flex:none; width:9px; max-height:var(--board-max-h, 620px); cursor:col-resize; position:relative;
     background:var(--panel); border-left:1px solid var(--border); border-right:1px solid var(--border);
     display:flex; align-items:center; justify-content:center; transition:background-color .1s ease;}
   .board-splitter:hover, .board-splitter.dragging{background:#e2e8f0;}
   .board-splitter::before{content:"⋮"; color:var(--text-faint); font-size:13px; letter-spacing:-1px; line-height:1; pointer-events:none;}
+  /* drag handle BELOW the whole board (WBS table + Gantt chart) — lets the user resize how TALL the
+     combined area is (independent of the horizontal splitter above, which only affects width). Lives
+     outside .board itself (board has overflow:hidden) so it's a plain sibling row under it.
+     Double-click resets to the default height. */
+  .board-height-splitter{height:9px; cursor:row-resize; border-radius:0 0 12px 12px;
+    background:var(--panel); border:1px solid var(--border); border-top:none; margin-top:-1px;
+    display:flex; align-items:center; justify-content:center; transition:background-color .1s ease;}
+  .board-height-splitter:hover, .board-height-splitter.dragging{background:#e2e8f0;}
+  .board-height-splitter::before{content:"⋯"; color:var(--text-faint); font-size:13px; letter-spacing:-1px; line-height:1; pointer-events:none;}
 
   table.wbs-table{border-collapse:collapse; width:932px; table-layout:fixed;}
   table.wbs-table thead th{
@@ -525,6 +535,8 @@
          這個遮罩收掉（見 enterProject()/loadFromSheet() 裡的 showBoardLoading()/hideBoardLoading()）。 -->
     <div class="board-loading-overlay" id="boardLoadingOverlay" style="display:none">載入中…</div>
   </div>
+  <div class="board-height-splitter" id="boardHeightSplitter" title="拖曳調整上下高度；雙擊還原預設高度"
+    onmousedown="boardHeightSplitterStart(event)" ondblclick="boardHeightSplitterReset()"></div>
 
   <div class="legend">
     <div class="item"><span class="swatch" id="legendNotStarted" style="background:#94a3b8"></span> 未開始</div>
@@ -2809,6 +2821,48 @@ function boardSplitterReset(){
   saveUiState();
 }
 
+/* ---------- board height splitter: drag to resize how tall the WBS table + Gantt chart area is ----------
+   Mirrors boardSplitterStart/Move/End/Reset above exactly, but adjusts the --board-max-h CSS custom
+   property (applied to .wbs-panel/.gantt-panel/.board-splitter's max-height) instead of wbsPanel's width. */
+const DEFAULT_BOARD_MAX_H = 620;
+const MIN_BOARD_MAX_H = 200;  // keep at least a handful of rows visible
+const MAX_BOARD_MAX_H = 2000; // avoid an accidental drag making the board absurdly tall
+let boardHeightOverride = null; // null = use the default (DEFAULT_BOARD_MAX_H)
+let heightSplitterStartY = 0, heightSplitterStartH = 0;
+function applyBoardHeight(){
+  const h = boardHeightOverride!=null ? boardHeightOverride : DEFAULT_BOARD_MAX_H;
+  document.documentElement.style.setProperty('--board-max-h', h+'px');
+}
+function boardHeightSplitterStart(e){
+  e.preventDefault(); // avoid text selection while dragging
+  heightSplitterStartY = e.clientY;
+  // start from the CURRENT max-height setting (override or default), not the panel's actual rendered
+  // height — when the content is shorter than max-height, overflow:auto means the rendered height is
+  // smaller than the cap, so measuring the DOM directly would make the drag jump/shrink unexpectedly.
+  heightSplitterStartH = boardHeightOverride!=null ? boardHeightOverride : DEFAULT_BOARD_MAX_H;
+  document.getElementById('boardHeightSplitter').classList.add('dragging');
+  document.addEventListener('mousemove', boardHeightSplitterMove);
+  document.addEventListener('mouseup', boardHeightSplitterEnd);
+}
+function boardHeightSplitterMove(e){
+  let h = heightSplitterStartH + (e.clientY - heightSplitterStartY);
+  h = Math.min(MAX_BOARD_MAX_H, Math.max(MIN_BOARD_MAX_H, h));
+  boardHeightOverride = h;
+  applyBoardHeight();
+}
+function boardHeightSplitterEnd(){
+  document.getElementById('boardHeightSplitter').classList.remove('dragging');
+  document.removeEventListener('mousemove', boardHeightSplitterMove);
+  document.removeEventListener('mouseup', boardHeightSplitterEnd);
+  saveUiState();
+}
+// double-click the splitter to go back to the default height
+function boardHeightSplitterReset(){
+  boardHeightOverride = null;
+  applyBoardHeight();
+  saveUiState();
+}
+
 /* ---------- v58: remember the on-screen "arrangement" across a close/reopen (民國/西元、甘特圖縮放、
    排序欄位、只顯示關鍵路徑、WBS/甘特 分隔線寬度、任務摺疊/展開狀態) ----------
    Same rationale and pattern as the column layout persistence above: these are all per-browser DISPLAY
@@ -2823,7 +2877,7 @@ function saveUiState(){
     const showBaselineEl = document.getElementById('showBaseline');
     const showDataDateEl = document.getElementById('showDataDate');
     localStorage.setItem(storageKey(UI_STATE_STORAGE_KEY), JSON.stringify({
-      calendarMode, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride,
+      calendarMode, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride, boardHeightOverride,
       critOnly: critOnlyEl ? critOnlyEl.checked : false,
       showBaseline: showBaselineEl ? showBaselineEl.checked : true,
       showDataDate: showDataDateEl ? showDataDateEl.checked : true,
@@ -2846,6 +2900,8 @@ function loadUiState(){
     if(typeof saved.sortColKey === 'string' || saved.sortColKey === null) sortColKey = saved.sortColKey;
     if(saved.sortDir === 0 || saved.sortDir === 1 || saved.sortDir === 2) sortDir = saved.sortDir;
     if(Number.isFinite(saved.wbsPanelWidthOverride)) wbsPanelWidthOverride = saved.wbsPanelWidthOverride;
+    if(Number.isFinite(saved.boardHeightOverride)) boardHeightOverride = saved.boardHeightOverride;
+    applyBoardHeight();
     if(saved.collapsed && typeof saved.collapsed === 'object') collapsed = {...saved.collapsed};
     if(saved.hiddenIds && typeof saved.hiddenIds === 'object') hiddenIds = {...saved.hiddenIds};
     // critOnly is a plain checkbox in the toolbar, not a JS variable — restore it directly onto the
@@ -2872,6 +2928,8 @@ function resetUiStateToDefaults(){
   sortColKey = null;
   sortDir = 0;
   wbsPanelWidthOverride = null;
+  boardHeightOverride = null;
+  applyBoardHeight();
   collapsed = {};
   hiddenIds = {};
   const critOnlyEl = document.getElementById('critOnly');
