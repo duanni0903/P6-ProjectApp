@@ -62,12 +62,17 @@
   :root{ --board-max-h: 620px; }
   .board{display:flex; position:relative; background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.03);}
   .board-loading-overlay{position:absolute; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.78); color:var(--text-dim); font-size:14px; font-weight:600;}
-  .wbs-panel{width:932px; flex:none; overflow:auto; max-height:var(--board-max-h, 620px);}
-  .gantt-panel{flex:1; overflow:auto; max-height:var(--board-max-h, 620px); position:relative; min-width:120px;}
+  /* v2 fix: these were "max-height" — a CEILING that only kicks in once content already exceeds it.
+     When the task list is shorter than that, dragging the height-splitter to make it BIGGER did
+     nothing visible, because the panel kept shrinking to fit its (shorter) content regardless of the
+     CSS var. Switched to a real "height" so the box always honors the dragged size: extra blank space
+     below short content, or the usual internal scrollbar once content exceeds it either way. */
+  .wbs-panel{width:932px; flex:none; overflow:auto; height:var(--board-max-h, 620px);}
+  .gantt-panel{flex:1; overflow:auto; height:var(--board-max-h, 620px); position:relative; min-width:120px;}
   /* drag handle between the WBS table and the Gantt chart — lets the user manually resize how
      much horizontal space each side gets (independent of the WBS table's own column widths,
      which otherwise auto-size the panel to fit exactly). Double-click resets to auto-fit. */
-  .board-splitter{flex:none; width:9px; max-height:var(--board-max-h, 620px); cursor:col-resize; position:relative;
+  .board-splitter{flex:none; width:9px; height:var(--board-max-h, 620px); cursor:col-resize; position:relative;
     background:var(--panel); border-left:1px solid var(--border); border-right:1px solid var(--border);
     display:flex; align-items:center; justify-content:center; transition:background-color .1s ease;}
   .board-splitter:hover, .board-splitter.dragging{background:#e2e8f0;}
@@ -75,16 +80,12 @@
   /* drag handle BELOW the whole board (WBS table + Gantt chart) — lets the user resize how TALL the
      combined area is (independent of the horizontal splitter above, which only affects width). Lives
      outside .board itself (board has overflow:hidden) so it's a plain sibling row under it.
-     Double-click resets to the default height.
-     v2: made taller + clearly labeled (not just a thin "⋯" strip) — when the board already fills its
-     max-height (the exact situation this handle exists for), this row can end up well down the page,
-     so it needs to be easy to spot/grab on sight rather than something you have to go hunting for. */
-  .board-height-splitter{height:20px; cursor:row-resize; border-radius:0 0 12px 12px;
-    background:#eef2f7; border:1px solid var(--border); border-top:none; margin-top:-1px;
-    display:flex; align-items:center; justify-content:center; gap:6px; transition:background-color .1s ease;
-    color:var(--text-dim); font-size:11px; font-weight:600; user-select:none;}
-  .board-height-splitter:hover, .board-height-splitter.dragging{background:#dbe5f0;}
-  .board-height-splitter::before{content:"⠿⠿⠿ 拖曳調整高度（雙擊還原） ⠿⠿⠿"; letter-spacing:.5px; pointer-events:none;}
+     Double-click resets to the default height. */
+  .board-height-splitter{height:9px; cursor:row-resize; border-radius:0 0 12px 12px;
+    background:var(--panel); border:1px solid var(--border); border-top:none; margin-top:-1px;
+    display:flex; align-items:center; justify-content:center; transition:background-color .1s ease;}
+  .board-height-splitter:hover, .board-height-splitter.dragging{background:#e2e8f0;}
+  .board-height-splitter::before{content:"⋯"; color:var(--text-faint); font-size:13px; letter-spacing:-1px; line-height:1; pointer-events:none;}
 
   table.wbs-table{border-collapse:collapse; width:932px; table-layout:fixed;}
   table.wbs-table thead th{
