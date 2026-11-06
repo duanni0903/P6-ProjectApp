@@ -753,6 +753,15 @@
         工具列的「顯示資料日期」開關隱藏），純粹視覺提示，不會動到任何排程計算。留空＝不設定，甘特
         圖就不會畫這條線；要清除既有設定，把日期欄位清空後按確定即可。</div>
     </div>
+    <div class="field">
+      <label>專案完工日期 Must-Finish-By Date</label>
+      <input type="date" id="projectTargetFinishDateInput">
+      <div class="hint">設定一個外部要求的「必須完工日」，用來計算浮時/最晚開始/最晚完成——設定後，所有
+        沒有後續任務的末端任務，最晚完成日會改成這個日期（而不是專案自己算出來的最早完工日），讓浮時
+        能真實反映「跟這個期限比還有多少餘裕」，如果目前的要徑比這個日期還晚，浮時會變成負數，提醒你
+        已經落後於要求的完工日。留空＝不設定（預設行為：浮時只跟專案自己算出來的最早完工日比較，所以
+        末端任務的浮時一定是 0）。</div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeProjectSettingsDialog()">取消 Cancel</button>
       <button class="btn primary" onclick="applyProjectSettingsDialog()">確定 OK</button>
@@ -954,6 +963,15 @@ let PROJECT_START = new Date(2026, 8, 7); // 2026-09-07 (Mon)
 // line simply isn't drawn). Set from the backend's settings.dataDate every time a project loads/re-enters
 // (loadFromSheet()), or changed via the ⚙️ 專案設定 dialog (applyProjectSettingsDialog()).
 let DATA_DATE = null;
+// v專案完工日期: this project's 目標完工日 (a project-level "Must Finish By" constraint, P6 風格) — when
+// set, computeSchedule()'s backward pass anchors every task with NO successor to this date instead of
+// the project's own natural finish (projectDuration = max forecast EF), so 浮時/最晚開始/最晚完成 reflect
+// how much slack (or how far behind — float can go NEGATIVE) the plan has against a externally-mandated
+// deadline, not just against its own longest path. null means "not set" — backward pass falls back to
+// the original self-referential behavior (every terminal task is critical relative to its own finish).
+// Set from the backend's settings.targetFinishDate every time a project loads/re-enters (loadFromSheet()),
+// or changed via the ⚙️ 專案設定 dialog (applyProjectSettingsDialog()) — same pattern as DATA_DATE above.
+let TARGET_FINISH_DATE = null;
 let zoom = 'week'; // 'week' | 'month'
 // v30: continuous Gantt timescale zoom. ganttPxPerDay is the single source of truth for the
 // horizontal scale — every x-coordinate in renderGantt() is derived from it via xOfDate(), so
@@ -1330,6 +1348,8 @@ function openProjectSettingsDialog(){
   // v資料日期: DATA_DATE can be null ("not set") — leave the date input empty in that case rather than
   // calling fmtDateInputValue(null), which would throw/produce garbage.
   document.getElementById('projectDataDateInput').value = DATA_DATE ? fmtDateInputValue(DATA_DATE) : '';
+  // v專案完工日期: same "can be null" handling as DATA_DATE above.
+  document.getElementById('projectTargetFinishDateInput').value = TARGET_FINISH_DATE ? fmtDateInputValue(TARGET_FINISH_DATE) : '';
   document.getElementById('projectSettingsOverlay').classList.add('open');
 }
 function closeProjectSettingsDialog(){
@@ -1348,12 +1368,21 @@ function applyProjectSettingsDialog(){
     dataDateParsed = parseIsoDateLocal(dataDateRaw);
     if(!dataDateParsed){ alert('資料日期格式不正確，請重新選擇，或留空清除。'); return; }
   }
+  // v專案完工日期: same "empty = clear, non-empty must parse" validation as 資料日期 above.
+  const targetFinishRaw = document.getElementById('projectTargetFinishDateInput').value;
+  let targetFinishParsed = null;
+  if(targetFinishRaw){
+    targetFinishParsed = parseIsoDateLocal(targetFinishRaw);
+    if(!targetFinishParsed){ alert('完工日期格式不正確，請重新選擇，或留空清除。'); return; }
+  }
   setProjectStartAnchor(parsed);
   DATA_DATE = dataDateParsed; // null when cleared — renderGantt() simply won't draw the line
+  TARGET_FINISH_DATE = targetFinishParsed; // null when cleared — backward pass falls back to projectDuration
   render(); // recompute every task's ES/EF/LS/LF against the new anchor immediately, and redraw the data-date line
   closeProjectSettingsDialog();
   syncProjectStartDateToBackend(raw);
   syncProjectDataDateToBackend(dataDateRaw); // '' when cleared — backend treats that as "clear the field"
+  syncProjectTargetFinishDateToBackend(targetFinishRaw); // '' when cleared — same as above
 }
 // 同步起始日到後端（跟 syncProjectNameToBackend 一樣的 fire-and-forget 模式）：畫面已經套用新起始日、
 // 排程也已經照新日期重算過了，不等這個 POST 的結果——離線/失敗就靜默放棄，這台瀏覽器下次重新整理或
@@ -1374,6 +1403,15 @@ function syncProjectDataDateToBackend(isoDateOrEmpty){
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},
     body: JSON.stringify({ token: API_TOKEN, action:'setProjectDataDate', project: currentProjectId, dataDate: isoDateOrEmpty }),
+  }).catch(()=>{});
+}
+// 同步專案完工日期到後端，跟 syncProjectDataDateToBackend 完全同一套 fire-and-forget 模式。
+function syncProjectTargetFinishDateToBackend(isoDateOrEmpty){
+  if(!SHEET_CONFIGURED) return;
+  fetch(SHEET_API_URL, {
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({ token: API_TOKEN, action:'setProjectTargetFinishDate', project: currentProjectId, targetFinishDate: isoDateOrEmpty }),
   }).catch(()=>{});
 }
 
@@ -1638,6 +1676,9 @@ async function loadFromSheet(){
     // (rather than leaving the previous project's DATA_DATE lingering) so switching projects can't leak
     // one project's data-date line into another's Gantt chart.
     DATA_DATE = (data && data.settings && parseIsoDateLocal(data.settings.dataDate)) || null;
+    // v專案完工日期: 跟 DATA_DATE 同樣的「沒有值就是正常的『還沒設定』」邏輯，一樣每次切換/重新進入
+    // 專案都明確重設，避免上一個專案的目標完工日滲到這個專案的浮時計算裡。
+    TARGET_FINISH_DATE = (data && data.settings && parseIsoDateLocal(data.settings.targetFinishDate)) || null;
     const taskData = data && Array.isArray(data.tasks) ? data.tasks : null;
     if(taskData && taskData.length){
       // ids/parent/preds[].id always travel as strings inside the app (see genNextId() above) —
@@ -1676,9 +1717,9 @@ async function loadFromSheet(){
     }
   }catch(err){
     // same cross-project leak risk as above applies to a failed fetch — clear rather than keep showing
-    // whatever project happened to be in memory before this call. DATA_DATE included (never got assigned
-    // this call since the fetch itself failed before settings.dataDate could be read).
-    tasks = []; owners = []; idCounter = 0; DATA_DATE = null;
+    // whatever project happened to be in memory before this call. DATA_DATE/TARGET_FINISH_DATE included
+    // (never got assigned this call since the fetch itself failed before settings could be read).
+    tasks = []; owners = []; idCounter = 0; DATA_DATE = null; TARGET_FINISH_DATE = null;
     selectedId = null; clipboardId = null; multiSelectIds = [];
     setSyncStatus('error', '無法連線到 Google Sheet（離線模式）');
   }
@@ -2231,6 +2272,12 @@ function computeSchedule(){
     }
   });
   const projectDuration = Math.max(0, ...order.map(t=>t.EF));
+  // v專案完工日期: when a 目標完工日 (Must-Finish-By) constraint is set, every terminal task (no
+  // successors) anchors its LF to THAT date instead of the project's own natural finish (projectDuration
+  // above) — see the backward pass below. +1 matches the existing ES/EF/endDate convention throughout
+  // this function (an exclusive day-index upper bound whose calendar date is PROJECT_DAY_LIST[idx-1]),
+  // so lateFinishDate ends up showing exactly the configured date, not the day before/after it.
+  const targetFinishIdx = TARGET_FINISH_DATE ? dayIndexOfIsoDate(isoDate(TARGET_FINISH_DATE)) : null;
 
   // v計畫時程: a SECOND, fully independent forward pass computing 計畫 (plan) ES/EF — the exact same
   // predecessor/lag/milestone-fixed-constraint logic as the pass above, but NEVER branches on
@@ -2272,7 +2319,7 @@ function computeSchedule(){
   [...order].reverse().forEach(t=>{
     const links = succLinks[t.id];
     let lf;
-    if(!links.length){ lf = projectDuration; }
+    if(!links.length){ lf = (targetFinishIdx!=null) ? (targetFinishIdx + 1) : projectDuration; }
     else {
       lf = Infinity;
       links.forEach(l=>{
@@ -5341,7 +5388,7 @@ function enterProject(id){
   // v切換專案載入提示: 在送出下面的 loadFromSheet() 請求之前，先把畫面上還留著的「上一個專案」資料
   // 清空並重畫一次（表格/甘特圖都變空），再蓋上「載入中…」遮罩——不這樣做的話，從 A 切到 B 時，畫面
   // 會先原封不動顯示 A 的任務好一陣子（直到 fetch 回來才整個換成 B），讓人以為卡住或切錯專案。
-  tasks = []; owners = []; idCounter = 0; DATA_DATE = null;
+  tasks = []; owners = []; idCounter = 0; DATA_DATE = null; TARGET_FINISH_DATE = null;
   selectedId = null; clipboardId = null; multiSelectIds = [];
   render();
   showBoardLoading();
