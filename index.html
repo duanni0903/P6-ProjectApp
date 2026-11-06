@@ -59,7 +59,8 @@
   .zoombtns button + button{border-left:1px solid var(--border-dark);}
 
   /* main split panel */
-  .board{display:flex; background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.03);}
+  .board{display:flex; position:relative; background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.03);}
+  .board-loading-overlay{position:absolute; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.78); color:var(--text-dim); font-size:14px; font-weight:600;}
   .wbs-panel{width:932px; flex:none; overflow:auto; max-height:620px;}
   .gantt-panel{flex:1; overflow:auto; max-height:620px; position:relative; min-width:120px;}
   /* drag handle between the WBS table and the Gantt chart — lets the user manually resize how
@@ -519,6 +520,10 @@
     <div class="gantt-panel" id="ganttPanel">
       <div class="gantt-svg-wrap" id="ganttWrap" oncontextmenu="showGanttBarsMenu(event)"></div>
     </div>
+    <!-- v切換專案載入提示: enterProject() 清空 tasks 並顯示這個遮罩，蓋住整個表格+甘特圖區域，避免
+         切換專案時先閃一下「舊專案」的資料，等 loadFromSheet() 拿到新專案的資料、render() 完成後再把
+         這個遮罩收掉（見 enterProject()/loadFromSheet() 裡的 showBoardLoading()/hideBoardLoading()）。 -->
+    <div class="board-loading-overlay" id="boardLoadingOverlay" style="display:none">載入中…</div>
   </div>
 
   <div class="legend">
@@ -1584,11 +1589,22 @@ function doSync(){
     })
     .catch(()=>{ setSyncStatus('error', '同步失敗（連不上 Google Sheet，可能是網路問題或部署設定）'); });
 }
+// v切換專案載入提示: 蓋住/收掉表格+甘特圖區域的「載入中…」遮罩——見 enterProject() 顯示它、
+// loadFromSheet() 收掉它（成功/失敗/離線三種結尾都會走到，不會卡住不消失）。
+function showBoardLoading(){
+  const el = document.getElementById('boardLoadingOverlay');
+  if(el) el.style.display = 'flex';
+}
+function hideBoardLoading(){
+  const el = document.getElementById('boardLoadingOverlay');
+  if(el) el.style.display = 'none';
+}
 async function loadFromSheet(){
   updateSyncButton();
   if(!SHEET_CONFIGURED){
     setSyncStatus('offline', '尚未設定 Google Sheet 連線（目前顯示內建範例資料）');
     render();
+    hideBoardLoading();
     return;
   }
   setSyncStatus('saving', '從 Google Sheet 載入中…');
@@ -1671,6 +1687,7 @@ async function loadFromSheet(){
   undoStack = []; redoStack = []; dirty = false;
   updateUndoRedoButtons(); updateSyncButton();
   render();
+  hideBoardLoading();
 }
 
 /* ---------- WBS table columns: order + visibility (drag to reorder, right-click to hide) ---------- */
@@ -5321,6 +5338,13 @@ function enterProject(id){
   }
   loadColumnLayout();
   loadUiState();
+  // v切換專案載入提示: 在送出下面的 loadFromSheet() 請求之前，先把畫面上還留著的「上一個專案」資料
+  // 清空並重畫一次（表格/甘特圖都變空），再蓋上「載入中…」遮罩——不這樣做的話，從 A 切到 B 時，畫面
+  // 會先原封不動顯示 A 的任務好一陣子（直到 fetch 回來才整個換成 B），讓人以為卡住或切錯專案。
+  tasks = []; owners = []; idCounter = 0; DATA_DATE = null;
+  selectedId = null; clipboardId = null; multiSelectIds = [];
+  render();
+  showBoardLoading();
   loadFromSheet();
 }
 
