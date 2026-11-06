@@ -476,11 +476,7 @@
           </select>
         </label>
         <label class="export-menu-paper-size">匯出字體大小
-          <select id="exportFontSize">
-            <option value="small">小</option>
-            <option value="medium" selected>中</option>
-            <option value="large">大</option>
-          </select>
+          <input type="number" id="exportFontSize" value="100" min="50" max="200" step="5" style="width:60px;">%
         </label>
         <button type="button" class="export-menu-item" onclick="exportToPdf()">📄 匯出 PDF（僅任務表）</button>
         <button type="button" class="export-menu-item" onclick="exportToPdfWithGantt()">📈 匯出 PDF（含甘特圖）</button>
@@ -4387,14 +4383,16 @@ function exportPaperSizeValue(){
   const sel = document.getElementById('exportPaperSize');
   return (sel && sel.value) || 'A4';
 }
-// v65: 匯出字體大小 — reads the 字體大小 selector in the export menu (小/中/大) and returns a
-// multiplier applied to the base font sizes used by every export (Excel / PDF 任務表 / PDF+甘特圖).
-// Mirrors exportPaperSizeValue()'s pattern exactly so it's a drop-in sibling, not a parallel mechanism.
-const EXPORT_FONT_SCALE = { small: 0.85, medium: 1, large: 1.25 };
+// v67: 匯出字體大小 — per Ni's request, changed from a 小/中/大 dropdown to a direct number-of-percent
+// input (100 = normal size), so any in-between value is reachable instead of only 3 fixed steps.
+// Returns the same kind of multiplier as before (0.85/1/1.25-ish), applied to the base font sizes used
+// by every export (Excel / PDF 任務表 / PDF+甘特圖) — exportPaperSizeValue()'s sibling, same pattern.
+const EXPORT_FONT_SCALE_MIN = 50, EXPORT_FONT_SCALE_MAX = 200; // % — keeps a stray typed value sane
 function exportFontScaleValue(){
-  const sel = document.getElementById('exportFontSize');
-  const key = (sel && sel.value) || 'medium';
-  return EXPORT_FONT_SCALE[key] || 1;
+  const el = document.getElementById('exportFontSize');
+  const raw = el ? parseFloat(el.value) : NaN;
+  const pct = Number.isFinite(raw) ? Math.min(EXPORT_FONT_SCALE_MAX, Math.max(EXPORT_FONT_SCALE_MIN, raw)) : 100;
+  return pct / 100;
 }
 // rounds to 1 decimal place so generated CSS stays readable (e.g. 10.2px, not 10.199999999999999px)
 function scaledFontPx(basePx){
