@@ -4517,6 +4517,9 @@ function ganttExportCss(){
   .axis-text{font-size:${scaledFontPx(10.5)}px; fill:#64748b; font-family:inherit;}
   .month-text{font-size:${scaledFontPx(11)}px; fill:#1e293b; font-weight:700; font-family:inherit;}
   .bar-label{font-size:${scaledFontPx(10)}px; fill:#fff; font-family:inherit; pointer-events:none;}
+  .data-date-line{stroke:#dc2626; stroke-width:2; stroke-dasharray:5,3;}
+  .data-date-flag{fill:#dc2626;}
+  .data-date-label{fill:#dc2626; font-size:${scaledFontPx(10)}px; font-weight:600; font-family:inherit;}
 `;
 }
 function exportToPdfWithGantt(){
