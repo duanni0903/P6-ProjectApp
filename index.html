@@ -379,6 +379,27 @@
   .project-card:hover .project-card-hide-btn{opacity:1;}
   .project-card.hidden-project{opacity:.5;}
   .project-card.hidden-project .project-card-hide-btn{opacity:1; background:var(--primary); color:#fff; border-color:var(--primary);}
+  /* v編輯鎖: 唯讀檢視模式下，擋掉所有會異動資料的控制項（按鈕用 .edit-ctrl 標記；其他可編輯格子/
+     按鈕沿用它們原本就有的 class，不需要額外標記）——只是畫面上的防呆，真正的寫入驗證仍在後端 */
+  #editLockBtn{border-color:var(--primary); color:var(--primary); font-weight:600;}
+  body.view-only .edit-ctrl,
+  body.view-only .editable-dur,
+  body.view-only .editable-actid,
+  body.view-only .task-name-text,
+  body.view-only .resp-inline-select,
+  body.view-only #projectTitle,
+  body.view-only .project-settings-btn,
+  body.view-only .icon-btn,
+  body.view-only .rel-add-btn,
+  body.view-only .rel-remove,
+  body.view-only .rel-type-select,
+  body.view-only .rel-lag-input,
+  body.view-only .project-card-hide-btn,
+  body.view-only .project-card.add-new{
+    pointer-events:none !important;
+    opacity:.4 !important;
+    cursor:not-allowed !important;
+  }
 </style>
 </head>
 <body>
@@ -401,8 +422,9 @@
       <div class="sub" id="metaLine"></div>
       <div style="display:flex; align-items:center; gap:8px; justify-content:flex-end; margin-top:2px;">
         <button class="btn" onclick="goHome()" title="回到首頁選擇其他專案">← 返回首頁</button>
+        <button class="btn" id="editLockBtn" onclick="toggleEditLock()" title="目前是唯讀檢視模式，點一下輸入密碼解鎖編輯功能">🔒 檢視模式（點此解鎖）</button>
         <div class="sync-status sync-offline" id="syncStatus">尚未連線</div>
-        <button class="btn primary" id="syncNowBtn" onclick="manualSync()" title="把目前尚未同步的變更寫回 Google Sheet">💾 同步</button>
+        <button class="btn primary edit-ctrl" id="syncNowBtn" onclick="manualSync()" title="把目前尚未同步的變更寫回 Google Sheet">💾 同步</button>
       </div>
     </div>
   </div>
@@ -410,13 +432,13 @@
   <div class="stats" id="statCards"></div>
 
   <div class="toolbar">
-    <button class="btn primary" onclick="quickAddTask()">＋ 新增任務</button>
-    <button class="btn" onclick="openOwnerMgmt()" title="建立/編輯負責人名冊，之後在任務裡就能直接從清單挑選指派">👥 負責人管理</button>
-    <button class="btn" id="baselineBtn" onclick="setBaseline()" title="把目前的計畫時程（最早開始/最早完成，不含實際進度）凍結成一條基準線，之後甘特圖會同時顯示基準線與最新排程，方便比對delay">📐 設定基準線</button>
+    <button class="btn primary edit-ctrl" onclick="quickAddTask()">＋ 新增任務</button>
+    <button class="btn edit-ctrl" onclick="openOwnerMgmt()" title="建立/編輯負責人名冊，之後在任務裡就能直接從清單挑選指派">👥 負責人管理</button>
+    <button class="btn edit-ctrl" id="baselineBtn" onclick="setBaseline()" title="把目前的計畫時程（最早開始/最早完成，不含實際進度）凍結成一條基準線，之後甘特圖會同時顯示基準線與最新排程，方便比對delay">📐 設定基準線</button>
     <label class="toggle"><input type="checkbox" id="showBaseline" onchange="saveUiState(); render()" checked> 顯示基準線</label>
     <label class="toggle"><input type="checkbox" id="showDataDate" onchange="saveUiState(); render()" checked title="在甘特圖上顯示資料日期那條紅色參考線（純粹視覺標記，不影響排程計算）"> 顯示資料日期</label>
-    <button class="btn" id="undoBtn" onclick="undo()" title="復原上一步變更（Ctrl+Z）" disabled>↶ 上一步</button>
-    <button class="btn" id="redoBtn" onclick="redo()" title="重做（Ctrl+Shift+Z）" disabled>↷ 下一步</button>
+    <button class="btn edit-ctrl" id="undoBtn" onclick="undo()" title="復原上一步變更（Ctrl+Z）" disabled>↶ 上一步</button>
+    <button class="btn edit-ctrl" id="redoBtn" onclick="redo()" title="重做（Ctrl+Shift+Z）" disabled>↷ 下一步</button>
     <label class="toggle"><input type="checkbox" id="critOnly" onchange="saveUiState(); render()"> 只顯示關鍵路徑</label>
     <div class="col-panel-wrap">
       <button class="btn" id="colPanelBtn" onclick="toggleColPanel(event)" title="勾選要顯示的欄位">☰ 欄位顯示</button>
@@ -460,14 +482,14 @@
     <span class="hint" style="margin:0">拖曳欄位標題可調整順序 · 右鍵欄位標題可移動/隱藏</span>
     <div id="clipboardBar" style="display:none; align-items:center; gap:6px;">
       <span id="clipboardLabel" class="hint" style="margin:0;"></span>
-      <button class="btn primary" onclick="pasteTask()">貼上到選取位置</button>
+      <button class="btn primary edit-ctrl" onclick="pasteTask()">貼上到選取位置</button>
       <button class="btn" onclick="cancelCut()">取消剪下</button>
     </div>
     <span class="hint" style="margin:0 0 0 4px">點一列任務選取 → Ctrl+X 剪下 → 點目標位置 → Ctrl+V 貼到它前面</span>
     <span class="hint" style="margin:0 0 0 4px">點一格 + Shift+點另一格可選取多格範圍 → Ctrl+C 複製，可直接貼到 Excel</span>
     <div id="chainBar" style="display:none; align-items:center; gap:6px;">
       <span id="chainLabel" class="hint" style="margin:0;"></span>
-      <button class="btn primary" onclick="chainLinkTasks()">依序建立相依關係</button>
+      <button class="btn primary edit-ctrl" onclick="chainLinkTasks()">依序建立相依關係</button>
       <button class="btn" onclick="clearChainSelect()">清除選取</button>
     </div>
     <span class="hint" style="margin:0 0 0 4px">點第一個任務 → Ctrl(⌘)+點擊依序加入其他任務 → 右鍵「依序建立相依關係」串成 FS 相依鏈</span>
@@ -786,6 +808,48 @@
 const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwaDvA-PAO0eTBNTv-1vkfPPnQu1LWCB4awcFYVcqgStAS3P6hVzM4Rkj34qlbxSwtH/exec';
 const API_TOKEN = '123456789';
 const SHEET_CONFIGURED = !!SHEET_API_URL && SHEET_API_URL.indexOf('PASTE_') !== 0;
+
+/* ---------- v編輯鎖: 預設唯讀檢視，只有知道密碼的人才能解鎖編輯 ----------
+   這不是真正無法破解的安全機制——這整個檔案（包含上面的 API_TOKEN）都是公開的靜態檔案，技術背景的人
+   看原始碼一樣拿得到 EDIT_PASSWORD、甚至 API_TOKEN，直接呼叫後端 API 寫入也繞得過這一層。這一層只是
+   擋掉「一般同事」在畫面上誤觸/誤改——真正要防住技術性的人，需要換成 Google 帳號登入驗證的架構。
+   解鎖狀態存在這台瀏覽器的 localStorage（重新整理/關掉分頁再打開都還記得），不會跟其他瀏覽器/裝置
+   共用——換一台電腦或換瀏覽器一樣要重新輸入密碼。要改密碼，直接改下面這個常數即可。 */
+const EDIT_PASSWORD = '123456789';
+const EDIT_LOCK_STORAGE_KEY = 'p6lite_edit_unlocked_v1';
+let editUnlocked = (function(){
+  try { return localStorage.getItem(EDIT_LOCK_STORAGE_KEY) === '1'; } catch (e) { return false; }
+})();
+// every function that mutates任務/負責人/專案設定等資料的入口都先呼叫這個——鎖住時彈出提示並中止，
+// 解鎖時直接放行（return true）。畫面上大部分編輯用的按鈕/格子還另外用 CSS（.view-only .edit-ctrl 等）
+// 直接擋掉點擊，這裡則是最後一道防線，就算某個控制項漏掛 CSS，實際的資料異動還是會被擋下來。
+function requireEdit(){
+  if(editUnlocked) return true;
+  alert('目前是「檢視模式」（唯讀），無法編輯。\n\n請點右上角「🔒 檢視模式」按鈕，輸入密碼解鎖編輯功能。');
+  return false;
+}
+function updateEditLockUI(){
+  document.body.classList.toggle('view-only', !editUnlocked);
+  const btn = document.getElementById('editLockBtn');
+  if(btn){
+    btn.textContent = editUnlocked ? '🔓 編輯模式（點此鎖定）' : '🔒 檢視模式（點此解鎖）';
+    btn.title = editUnlocked ? '目前可以編輯，點一下鎖回唯讀檢視模式' : '目前是唯讀檢視模式，點一下輸入密碼解鎖編輯功能';
+  }
+}
+function toggleEditLock(){
+  if(editUnlocked){
+    if(!confirm('要切回「檢視模式」嗎？切回後，這台瀏覽器要再輸入一次密碼才能繼續編輯。')) return;
+    editUnlocked = false;
+    try { localStorage.removeItem(EDIT_LOCK_STORAGE_KEY); } catch(e){}
+  } else {
+    const pw = prompt('請輸入編輯密碼：');
+    if(pw===null) return; // 使用者按取消
+    if(pw !== EDIT_PASSWORD){ alert('密碼錯誤。'); return; }
+    editUnlocked = true;
+    try { localStorage.setItem(EDIT_LOCK_STORAGE_KEY, '1'); } catch(e){}
+  }
+  updateEditLockUI();
+}
 
 /* ---------- multi-project support ----------
    One shared Google Sheet + one shared Apps Script Web App now serves multiple "projects", each with
@@ -1192,6 +1256,7 @@ function applyStoredProjectNameOverride(){
   if(saved && saved.trim()){ projectName = saved.trim(); applyProjectName(); }
 }
 function startProjectNameEdit(e){
+  if(!requireEdit()) return;
   if(e) e.stopPropagation();
   // mutate the stable wrapper <div> around the title, not the <h1>'s own outerHTML — Chromium can throw
   // "node to be removed is no longer a child" if a blur handler later replaces the very element whose
@@ -1255,6 +1320,7 @@ function syncProjectNameToBackend(name){
 // loadFromSheet()/setProjectStartAnchor() above — this dialog is purely the user-facing way to CHANGE
 // a project's stored startDate (persisted to the backend's 專案 registry via setProjectStartDate).
 function openProjectSettingsDialog(){
+  if(!requireEdit()) return;
   document.getElementById('projectStartDateInput').value = fmtDateInputValue(PROJECT_START);
   // v資料日期: DATA_DATE can be null ("not set") — leave the date input empty in that case rather than
   // calling fmtDateInputValue(null), which would throw/produce garbage.
@@ -1265,6 +1331,7 @@ function closeProjectSettingsDialog(){
   document.getElementById('projectSettingsOverlay').classList.remove('open');
 }
 function applyProjectSettingsDialog(){
+  if(!requireEdit()) return;
   const raw = document.getElementById('projectStartDateInput').value;
   const parsed = parseIsoDateLocal(raw);
   if(!parsed){ alert('請選擇一個有效的起始日。'); return; }
@@ -1435,6 +1502,7 @@ function pushUndoSnapshot(preSnap){
   markDirty();
 }
 function undo(){
+  if(!requireEdit()) return;
   if(!undoStack.length) return;
   redoStack.push(snapshotTasks());
   tasks = cloneSnapshot(undoStack.pop());
@@ -1444,6 +1512,7 @@ function undo(){
   markDirty();
 }
 function redo(){
+  if(!requireEdit()) return;
   if(!redoStack.length) return;
   undoStack.push(snapshotTasks());
   tasks = cloneSnapshot(redoStack.pop());
@@ -1472,6 +1541,7 @@ let syncTimer = null;
 // only runs when the person clicks "💾 同步" (manualSync()) or a test calls it directly — editing no
 // longer triggers this automatically, so undo/redo stay meaningful right up until an explicit sync
 function syncToSheet(){
+  if(!requireEdit()) return;
   if(!SHEET_CONFIGURED){ setSyncStatus('offline', '尚未設定 Google Sheet 連線（目前僅在本機記憶體中編輯，重新整理會遺失）'); return; }
   setSyncStatus('saving', '同步中…');
   clearTimeout(syncTimer);
@@ -1488,6 +1558,7 @@ function manualSync(){ syncToSheet(); }
 // progress, so basing the baseline on it would make the comparison compare forecast against forecast
 // instead of plan against reality.
 function setBaseline(){
+  if(!requireEdit()) return;
   if(!confirm('要把目前的計畫時程（最早開始/最早完成）設定為新的基準線嗎？\n\n這會覆蓋先前設定過的基準線（如果有的話），之後甘特圖會同時顯示這條基準線與最新排程，方便比對 delay。')) return;
   const _pre = snapshotTasks();
   computeSchedule(); // make sure every task's planStartDate/planEndDate reflects the very latest edits before freezing
@@ -1849,6 +1920,7 @@ function placeUnderParent(task, parentId){
   moveTaskAfterSubtree(task, parentId);
 }
 function indentTask(id){
+  if(!requireEdit()) return;
   const t = tasks.find(x=>x.id===id); if(!t) return;
   const siblings = tasks.filter(x=>x.parent===t.parent);
   const idx = siblings.findIndex(x=>x.id===id);
@@ -1863,6 +1935,7 @@ function indentTask(id){
   pushUndoSnapshot(_pre);
 }
 function outdentTask(id){
+  if(!requireEdit()) return;
   const t = tasks.find(x=>x.id===id); if(!t) return;
   if(t.parent===null) return; // already top-level
   const _pre = snapshotTasks();
@@ -1956,6 +2029,7 @@ function predDependsOn(fromId, targetId, seen){
 // task[1] gets task[0] as a predecessor, task[2] gets task[1], and so on. Existing predecessors
 // on each task are kept (this only adds/updates the one link to its immediate chain predecessor).
 function chainLinkTasks(){
+  if(!requireEdit()) return;
   if(multiSelectIds.length < 2) return;
   const chain = multiSelectIds.map(id=>tasks.find(t=>t.id===id));
   const badIdx = chain.findIndex(t=>!t || hasKids(t));
@@ -1987,6 +2061,7 @@ function updateClipboardBar(){
   document.getElementById('clipboardLabel').textContent = src ? `已剪下「${src.name}」，點一列目標任務再貼上` : '';
 }
 function cutTask(){
+  if(!requireEdit()) return;
   if(selectedId==null) return;
   clipboardId = selectedId;
   renderTable();
@@ -1999,6 +2074,7 @@ function cancelCut(){
   updateClipboardBar();
 }
 function pasteTask(){
+  if(!requireEdit()) return;
   if(clipboardId==null || selectedId==null) return;
   if(clipboardId===selectedId){ return; } // pasting onto itself: no-op
   const cutSet = new Set(); collectSubtree(clipboardId, cutSet);
@@ -2458,6 +2534,7 @@ function respSelectHtml(t){
   return `<select class="resp-inline-select" onclick="event.stopPropagation()" onchange="commitRespInline(this,'${t.id}')" title="指派負責人">${html}</select>`;
 }
 function commitRespInline(sel, id){
+  if(!requireEdit()){ render(); return; }
   const t = tasks.find(x=>x.id===id);
   if(!t) return;
   const v = sel.value;
@@ -2471,6 +2548,7 @@ function commitRespInline(sel, id){
 // opening the full edit Modal. start/end 日期 are computed by CPM from duration+相依關係, so they
 // aren't directly editable here; duration is the one raw field that actually drives the schedule.
 function startDurEdit(e, id){
+  if(!requireEdit()) return;
   e.stopPropagation(); // don't let the click bubble up to the row's onclick (selectRow)
   const t = tasks.find(x=>x.id===id);
   if(!t || hasKids(t) || t.milestone) return;
@@ -2502,6 +2580,7 @@ function commitDurEdit(input, id){
 // Invalid or duplicate input is rejected with an alert and reverted, same pattern as commitNameEdit
 // rejecting an empty name.
 function startIdEdit(e, id){
+  if(!requireEdit()) return;
   e.stopPropagation();
   const t = tasks.find(x=>x.id===id);
   if(!t) return;
@@ -2555,6 +2634,7 @@ function commitIdEdit(input, id){
 // single-click pattern as the Activity ID / 工期 cells), no need to open the full edit Modal just
 // to change a name. Works on both leaf tasks and summary rows.
 function startNameEdit(e, id){
+  if(!requireEdit()) return;
   e.stopPropagation();
   const t = tasks.find(x=>x.id===id);
   if(!t) return;
@@ -2583,6 +2663,7 @@ function commitNameEdit(input, id){
 // openAddModal() flow for those three entry points (openEditModal's pencil icon is unchanged, since
 // that one is for editing an existing task's full details — duration/budget/predecessors etc).
 function quickAddTask(presetParent){
+  if(!requireEdit()) return;
   const parent = presetParent===undefined ? null : presetParent;
   const _pre = snapshotTasks();
   if(parent!==null){ const pt = tasks.find(x=>x.id===parent); if(pt) demoteToSummary(pt); }
@@ -3112,6 +3193,7 @@ function findPredEntry(taskId, predId){
   return (t.preds||[]).find(p=>p.id===predId) || null;
 }
 function setRelType(taskId, predId, newType){
+  if(!requireEdit()){ render(); return; }
   const e = findPredEntry(taskId, predId);
   if(!e) return;
   const _pre = snapshotTasks();
@@ -3119,6 +3201,7 @@ function setRelType(taskId, predId, newType){
   render(); pushUndoSnapshot(_pre);
 }
 function setRelLag(taskId, predId, newLagRaw){
+  if(!requireEdit()){ render(); return; }
   const e = findPredEntry(taskId, predId);
   if(!e) return;
   const _pre = snapshotTasks();
@@ -3126,6 +3209,7 @@ function setRelLag(taskId, predId, newLagRaw){
   render(); pushUndoSnapshot(_pre);
 }
 function removeRel(taskId, predId){
+  if(!requireEdit()) return;
   const t = tasks.find(x=>x.id===taskId);
   if(!t) return;
   const _pre = snapshotTasks();
@@ -3145,6 +3229,7 @@ function confirmRemoveRel(taskId, predId){
 // fillPredList's default for a freshly-checked box) — the user can then adjust type/lag inline
 // via the same select/input this panel already renders for existing rows.
 function addPredFromPanel(ownerId, predId){
+  if(!requireEdit()) return;
   if(!predId) return;
   const t = tasks.find(x=>x.id===ownerId);
   if(!t) return;
@@ -3157,6 +3242,7 @@ function addPredFromPanel(ownerId, predId){
 // Adds a successor relationship: makes `ownerId` one of `succId`'s predecessors (a successor
 // relationship is just the mirror image of a predecessor one — see relRowHtml's comment above).
 function addSuccFromPanel(ownerId, succId){
+  if(!requireEdit()) return;
   if(!succId) return;
   const t = tasks.find(x=>x.id===succId);
   if(!t) return;
@@ -3173,6 +3259,7 @@ function addSuccFromPanel(ownerId, succId){
 // so pickRelTask() knows whether to call addPredFromPanel or addSuccFromPanel, and with which owner.
 let relPickCtx = null; // {mode:'pred'|'succ', ownerId}
 function openRelPicker(mode, ownerId){
+  if(!requireEdit()) return;
   relPickCtx = {mode, ownerId};
   document.getElementById('relPickTitle').textContent = mode==='pred' ? '選擇前置任務' : '選擇後續任務';
   const search = document.getElementById('relPickSearch');
@@ -4710,6 +4797,7 @@ function pickRespName(name){
    selectable there. Purely a local-first edit like everything else in this app: nothing is pushed to the
    Sheet until the person clicks 💾 同步. */
 function openOwnerMgmt(){
+  if(!requireEdit()) return;
   renderOwnerMgmtList();
   document.getElementById('ownerMgmtOverlay').classList.add('open');
   document.getElementById('omNewName').focus();
@@ -4733,6 +4821,7 @@ function renderOwnerMgmtList(){
     : '<div class="rel-pick-empty">尚無負責人，請在下方新增</div>';
 }
 function addOwnerFromMgmt(){
+  if(!requireEdit()) return;
   const nameInp = document.getElementById('omNewName');
   const name = nameInp.value.trim();
   if(!name){ alert('請輸入姓名'); nameInp.focus(); return; }
@@ -4750,6 +4839,7 @@ function updateOwnerField(name, field, value){
   o[field] = value.trim();
 }
 function deleteOwnerFromMgmt(name){
+  if(!requireEdit()) return;
   const stillUsed = tasks.some(t=>!hasKids(t) && t.responsible===name);
   const msg = stillUsed
     ? `「${name}」目前仍指派在部分任務上。從名冊移除後，這些任務的負責人欄位不會被清空，但這個人的部門/聯絡方式資訊會遺失。確定要移除嗎？`
@@ -4778,6 +4868,7 @@ function openAddModal(presetParent){
   document.getElementById('overlay').classList.add('open');
 }
 function openEditModal(id){
+  if(!requireEdit()) return;
   const t = tasks.find(x=>x.id===id); if(!t) return;
   editingId = id;
   const isSum = hasKids(t);
@@ -4880,6 +4971,7 @@ function onConstraintTypeChange(){
 function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
 
 function saveTask(){
+  if(!requireEdit()) return;
   const name = f_name.value.trim();
   if(!name){ alert('請輸入任務名稱'); return; }
   // v62: a milestone with "指定絕對日期" selected must actually have a date, or it silently falls
@@ -4958,6 +5050,7 @@ function deleteCurrent(){
 // shared by the edit-modal delete button and the right-click context menu. Returns true if the
 // deletion actually happened (false if the user cancelled the confirm dialog).
 function deleteTaskById(id){
+  if(!requireEdit()) return false;
   const t = tasks.find(x=>x.id===id);
   if(!t) return false;
   const kids = hasKids(t);
@@ -4982,6 +5075,7 @@ function deleteTaskById(id){
 // internal cross-references between cloned nodes are remapped to the new ids; references to
 // tasks outside the duplicated subtree are left pointing at the originals.
 function duplicateTask(id){
+  if(!requireEdit()) return;
   const root = tasks.find(x=>x.id===id); if(!root) return;
   const _pre = snapshotTasks();
   const subtreeIds = new Set(); collectSubtree(id, subtreeIds);
@@ -5153,6 +5247,7 @@ function hideProjectPrompt(id, name){
 // 後端的「專案」註冊表；如果後端沒設定或同步失敗，把畫面狀態還原，避免這台瀏覽器看到的狀態跟其他
 // 裝置/瀏覽器（下次讀 ?list=1 時）不一致。
 async function setProjectHiddenFlag(id, hidden){
+  if(!requireEdit()) return;
   const p = projects.find(x=>x.id===id);
   if(p) p.hidden = hidden;
   renderHomeScreen();
@@ -5177,6 +5272,7 @@ async function setProjectHiddenFlag(id, hidden){
   }
 }
 async function createProjectFlow(){
+  if(!requireEdit()) return;
   const name = prompt('請輸入新專案名稱：');
   if(!name || !name.trim()) return;
   if(!SHEET_CONFIGURED){ alert('尚未設定 Google Sheet 連線，無法建立新專案。'); return; }
@@ -5228,6 +5324,7 @@ function enterProject(id){
   loadFromSheet();
 }
 
+updateEditLockUI();
 showHomeScreen();
 </script>
 </body>
