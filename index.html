@@ -235,6 +235,21 @@
   .owner-mgmt-add-row{display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px; align-items:center; padding:8px; border:1px dashed var(--border-dark); border-radius:7px;}
   .owner-mgmt-add-row input[type=text]{padding:6px 8px; border:1px solid var(--border-dark); border-radius:6px; font-size:12.5px; font-family:inherit; box-sizing:border-box;}
 
+  /* v70: WBS 結構管理視窗 — one row per task, in actual tree order (depth shown via left padding on the
+     name input, not a separate indent column, so renaming stays visually anchored to the WBS code). */
+  .wbs-mgmt-modal{width:640px;}
+  .wbs-mgmt-list{border:1px solid var(--border-dark); border-radius:7px; max-height:min(60vh,480px); overflow:auto; margin-bottom:10px;}
+  .wbs-mgmt-row{display:flex; align-items:center; gap:6px; padding:5px 8px; border-bottom:1px solid var(--border);}
+  .wbs-mgmt-row:last-child{border-bottom:none;}
+  .wbs-mgmt-row.wbs-mgmt-summary{background:#f8fafc;}
+  .wbs-mgmt-code{flex:none; width:52px; color:var(--text-faint); font-variant-numeric:tabular-nums; font-size:11.5px; text-align:right; padding-right:2px;}
+  .wbs-mgmt-name{flex:1; min-width:0; padding:5px 7px; border:1px solid var(--border-dark); border-radius:6px; font-size:12.5px; font-family:inherit; color:var(--text); box-sizing:border-box;}
+  .wbs-mgmt-row.wbs-mgmt-summary .wbs-mgmt-name{font-weight:700;}
+  .wbs-mgmt-btns{flex:none; display:flex; gap:2px;}
+  .wbs-mgmt-btn{border:none; background:none; color:var(--text-dim); cursor:pointer; padding:3px 5px; border-radius:5px; font-size:13px; line-height:1; display:flex; align-items:center;}
+  .wbs-mgmt-btn:hover:not(:disabled){background:#e2e8f0; color:var(--text);}
+  .wbs-mgmt-btn:disabled{opacity:.28; cursor:not-allowed;}
+
   /* v33: Timescale dialog — per-tier unit/mode rows */
   .modal-timescale{width:560px;}
   .ts-row{display:flex; align-items:center; gap:8px; margin-bottom:6px;}
@@ -450,6 +465,7 @@
   <div class="toolbar">
     <button class="btn primary edit-ctrl" onclick="quickAddTask()">＋ 新增任務</button>
     <button class="btn edit-ctrl" onclick="openOwnerMgmt()" title="建立/編輯負責人名冊，之後在任務裡就能直接從清單挑選指派">👥 負責人管理</button>
+    <button class="btn edit-ctrl" onclick="openWbsMgmt()" title="集中管理整個任務階層結構：改名、升降階層、調整同層順序，不用一列一列回到主表格操作">🗂 WBS 結構</button>
     <button class="btn edit-ctrl" id="baselineBtn" onclick="setBaseline()" title="把目前的計畫時程（最早開始/最早完成，不含實際進度）凍結成一條基準線，之後甘特圖會同時顯示基準線與最新排程，方便比對delay">📐 設定基準線</button>
     <label class="toggle"><input type="checkbox" id="showBaseline" onchange="saveUiState(); render()" checked> 顯示基準線</label>
     <label class="toggle"><input type="checkbox" id="showDataDate" onchange="saveUiState(); render()" checked title="在甘特圖上顯示資料日期那條紅色參考線（純粹視覺標記，不影響排程計算）"> 顯示資料日期</label>
@@ -687,6 +703,21 @@
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeOwnerMgmt()">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- v70: WBS 結構管理視窗 — Ni 要求一個「獨立的地方」可以統一管理整個任務階層（改名、升降階層、調整同層
+     順序），不用一列一列回到主表格操作。永遠依照目前的實際樹狀順序顯示（不受主表格「排序」設定影響，因為
+     WBS 編號本身就是由這個順序＋父子關係決定的），每一列重用既有的 indentTask()/outdentTask()（含
+     demoteToSummary/undo snapshot 等既有邏輯），新增的 moveSiblingUp()/moveSiblingDown() 則負責同層排序。 -->
+<div class="overlay" id="wbsMgmtOverlay">
+  <div class="modal wbs-mgmt-modal">
+    <h2>WBS 結構管理</h2>
+    <div class="hint" style="margin:-8px 0 12px;">在這裡可以直接改名、用 ⇥/⇤ 調整升降階層、用 ▲/▼ 調整同層顯示順序 — 所有調整都會立刻反映到主表格與甘特圖，WBS 編號會自動重新計算。</div>
+    <div class="wbs-mgmt-list" id="wbsMgmtList"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeWbsMgmt()">關閉</button>
     </div>
   </div>
 </div>
@@ -2014,6 +2045,52 @@ function outdentTask(id){
   const oldParent = tasks.find(x=>x.id===t.parent);
   t.parent = oldParent.parent;
   moveTaskAfterSubtree(t, oldParent.id);
+  render();
+  pushUndoSnapshot(_pre);
+}
+
+/* ---------- v70: reorder a task's position AMONG ITS SIBLINGS (changes WBS numbering order without
+   changing nesting depth) — used by the WBS 結構管理 dialog's ▲/▼ buttons. The `tasks` array already
+   keeps every subtree as a contiguous block (indentTask/outdentTask/moveTaskAfterSubtree all preserve
+   that invariant), so "move sibling up/down" is just swapping two adjacent contiguous blocks — this
+   moves the WHOLE subtree (any children come along with their parent), not just the one row. ---------- */
+function subtreeBlockBounds(rootId){
+  const ids = new Set(); collectSubtree(rootId, ids);
+  let start=-1, end=-1;
+  tasks.forEach((t,i)=>{ if(ids.has(t.id)){ if(start===-1) start=i; end=i; } });
+  return [start,end];
+}
+function swapSiblingBlocks(aId, bId){
+  const [aStart,aEnd] = subtreeBlockBounds(aId);
+  const [bStart,bEnd] = subtreeBlockBounds(bId);
+  if(aStart<0||bStart<0) return;
+  const firstIsA = aStart < bStart;
+  const [s1,e1] = firstIsA ? [aStart,aEnd] : [bStart,bEnd];
+  const [s2,e2] = firstIsA ? [bStart,bEnd] : [aStart,aEnd];
+  const block1 = tasks.slice(s1,e1+1);
+  const between = tasks.slice(e1+1,s2); // normally empty for true siblings — handled anyway, just in case
+  const block2 = tasks.slice(s2,e2+1);
+  tasks.splice(s1, (e2-s1+1), ...block2, ...between, ...block1);
+}
+function moveSiblingUp(id){
+  if(!requireEdit()) return;
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  const siblings = tasks.filter(x=>x.parent===t.parent);
+  const idx = siblings.findIndex(x=>x.id===id);
+  if(idx<=0) return; // already first among its siblings
+  const _pre = snapshotTasks();
+  swapSiblingBlocks(id, siblings[idx-1].id);
+  render();
+  pushUndoSnapshot(_pre);
+}
+function moveSiblingDown(id){
+  if(!requireEdit()) return;
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  const siblings = tasks.filter(x=>x.parent===t.parent);
+  const idx = siblings.findIndex(x=>x.id===id);
+  if(idx<0 || idx>=siblings.length-1) return; // already last among its siblings
+  const _pre = snapshotTasks();
+  swapSiblingBlocks(id, siblings[idx+1].id);
   render();
   pushUndoSnapshot(_pre);
 }
@@ -5008,6 +5085,62 @@ function deleteOwnerFromMgmt(name){
   if(!confirm(msg)) return;
   owners = owners.filter(o=>o.name!==name);
   renderOwnerMgmtList();
+}
+/* ---------- v70: WBS 結構管理視窗 ---------- */
+function openWbsMgmt(){
+  if(!requireEdit()) return;
+  renderWbsMgmtList();
+  document.getElementById('wbsMgmtOverlay').classList.add('open');
+}
+function closeWbsMgmt(){
+  document.getElementById('wbsMgmtOverlay').classList.remove('open');
+}
+// tasks 陣列本身就是依照目前的樹狀顯示順序排列（父節點永遠在所有子節點之前、整個子樹為連續區塊），
+// 所以縮排深度只要沿著 parent 鏈往上數即可，不需要額外維護一份 depth 欄位。
+function wbsMgmtDepthOf(t){
+  let d = 0, pid = t.parent;
+  while(pid !== null){
+    const pt = tasks.find(x=>x.id===pid);
+    if(!pt) break;
+    d++; pid = pt.parent;
+  }
+  return d;
+}
+function renderWbsMgmtList(){
+  const list = document.getElementById('wbsMgmtList');
+  if(!list) return;
+  list.innerHTML = tasks.length ? tasks.map(t=>{
+    const depth = wbsMgmtDepthOf(t);
+    const siblings = tasks.filter(x=>x.parent===t.parent);
+    const idx = siblings.findIndex(x=>x.id===t.id);
+    const isFirst = idx<=0;
+    const isLast = idx<0 || idx>=siblings.length-1;
+    const summary = hasKids(t);
+    return `
+      <div class="wbs-mgmt-row${summary?' wbs-mgmt-summary':''}">
+        <span class="wbs-mgmt-code">${t.wbs||''}</span>
+        <input type="text" class="wbs-mgmt-name" style="padding-left:${7+depth*18}px" value="${escAttr(t.name)}"
+          onclick="event.stopPropagation()" onblur="commitWbsMgmtNameEdit(this,'${t.id}')" onkeydown="wbsMgmtNameKeydown(event,this)">
+        <span class="wbs-mgmt-btns">
+          <button type="button" class="wbs-mgmt-btn" ${isFirst?'disabled':''} title="在同層往上移一位" onclick="moveSiblingUp('${t.id}'); renderWbsMgmtList();">▲</button>
+          <button type="button" class="wbs-mgmt-btn" ${isLast?'disabled':''} title="在同層往下移一位" onclick="moveSiblingDown('${t.id}'); renderWbsMgmtList();">▼</button>
+          <button type="button" class="wbs-mgmt-btn" ${canOutdentOf(t)?'':'disabled'} title="降一階：退回上一層（可退回成主要任務）" onclick="outdentTask('${t.id}'); renderWbsMgmtList();">${OUTDENT_ICON}</button>
+          <button type="button" class="wbs-mgmt-btn" ${canIndentOf(t)?'':'disabled'} title="升一階：變成上一列的子任務" onclick="indentTask('${t.id}'); renderWbsMgmtList();">${INDENT_ICON}</button>
+        </span>
+      </div>`;
+  }).join('') : '<div class="rel-pick-empty">尚無任務</div>';
+}
+function wbsMgmtNameKeydown(e, input){
+  if(e.key==='Enter'){ input.blur(); } // 觸發 onblur -> commitWbsMgmtNameEdit
+  else if(e.key==='Escape'){ input.dataset.cancelled = '1'; input.blur(); }
+}
+function commitWbsMgmtNameEdit(input, id){
+  if(input.dataset.cancelled==='1'){ renderWbsMgmtList(); return; } // Esc：放棄變更，重繪即可
+  const t = tasks.find(x=>x.id===id);
+  if(!t){ renderWbsMgmtList(); return; }
+  const v = input.value.trim();
+  if(v && v!==t.name){ const _pre = snapshotTasks(); t.name = v; render(); pushUndoSnapshot(_pre); renderWbsMgmtList(); }
+  else { renderWbsMgmtList(); } // 空白名稱不接受，保留原名
 }
 function openAddModal(presetParent){
   editingId = null;
