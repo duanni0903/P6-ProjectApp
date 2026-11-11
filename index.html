@@ -594,9 +594,10 @@
         <label>里程碑日期</label>
         <select id="f_constraintType" onchange="onConstraintTypeChange()">
           <option value="">依前置任務計算</option>
-          <option value="fixed">指定絕對日期</option>
+          <option value="fixed">指定絕對日期（必須在此日期開始/完成）</option>
         </select>
         <input type="date" id="f_constraintDate" style="margin-top:6px; display:none">
+        <div class="hint" id="f_constraintHint" style="display:none; margin-top:4px;">此日期為強制鎖定：不受前置任務影響，也會連帶鎖定最晚開始/完成日，浮時會依此重新計算（可能變成 0 或負數）。</div>
       </div>
       <div class="field">
         <label>前置任務（可複選，並可分別設定關係類型與 Lag/Lead）</label>
@@ -2347,6 +2348,26 @@ function computeSchedule(){
         lf = Math.min(lf, c);
       });
     }
+    // v69: a milestone with a "fixed" date constraint previously only anchored its ES/EF in the FORWARD
+    // pass above (ignoring predecessors) — but its LS/LF kept coming purely from its successors (or the
+    // project's natural end, if it had none), exactly like an unconstrained task. That meant 浮時 (float)
+    // for the constrained milestone itself, and for everything feeding into it, never actually reflected
+    // the hard date — a milestone pinned to a specific day could still show a large/misleading float.
+    // Per Ni's request ("一定要在那邊完成或開始，浮時就會變動"), this constraint now also overrides LF here,
+    // the same unconditional way the forward pass overrides ES — ignoring successor-implied dates too,
+    // not just capping them — so it behaves as a true two-way "mandatory" pin, not a one-way floor/ceiling.
+    // No "+1" here (unlike the targetFinishIdx terminal-task case below it): a milestone's ES/EF/duration=0
+    // convention already has EF===ES with no exclusive-upper-bound offset (see the forward pass above), so
+    // LF must land on that same idx, not idx+1, for LS(=LF since duration 0) to equal ES and float to be
+    // exactly 0 — the forward and backward anchors need to agree on the SAME point, not be one day apart.
+    // This single override point then correctly ripples backward through this milestone's OWN
+    // predecessors via the normal succLinks chaining below (and forward through its successors via ES
+    // in the pass above), so a tight/violated hard deadline shows up as reduced or negative float on
+    // every task that feeds it — not just on the milestone itself.
+    if(t.milestone && t.constraintType==='fixed' && t.constraintDate){
+      const fixedIdx = dayIndexOfIsoDate(t.constraintDate);
+      if(fixedIdx!==null) lf = fixedIdx;
+    }
     t.LF = lf;
     t.LS = t.LF - t.duration;
     t.float = t.LS - t.ES;
@@ -2551,7 +2572,7 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
       const chainBadge = chainIdx>=0 ? `<span class="chain-badge" title="Ctrl+點擊選取順序 ${chainIdx+1}">${chainIdx+1}</span>` : '';
       // v62: a small text tag (not another emoji/icon) flags a milestone whose date is manually
       // fixed rather than calculated from its predecessors
-      const constraintTag = (t.milestone && t.constraintType==='fixed') ? `<span class="constraint-tag" title="日期為手動指定，不受前置任務影響">［指定日期］</span>` : '';
+      const constraintTag = (t.milestone && t.constraintType==='fixed') ? `<span class="constraint-tag" title="日期為手動指定，不受前置任務影響；同時也鎖定最晚開始/完成日，浮時會依此重新計算">［指定日期］</span>` : '';
       const nameText = `<span class="task-name-text" ondblclick="startNameEdit(event, '${t.id}')" title="連續點兩下可直接改名">${isSum?'':(t.milestone?'◆ ':'')}${t.name}</span>${constraintTag}`;
       const nameCell = `<span style="padding-left:${depth*15}px; display:inline-flex; align-items:center; gap:3px" title="${isSum?'':'前置任務: '+predText(t)}">${arrow}${nameText}</span>`;
       return `<td class="col-name" title="${t.name}">${nameCell}${chainBadge}</td>`;
@@ -5001,6 +5022,7 @@ function openAddModal(presetParent){
   document.getElementById('f_constraintType').value = '';
   document.getElementById('f_constraintDate').value = '';
   document.getElementById('f_constraintDate').style.display = 'none';
+  document.getElementById('f_constraintHint').style.display = 'none';
   fillParentSelect(presetParent===undefined?null:presetParent, null);
   updateRespDisplay();
   fillPredList(null);
@@ -5028,6 +5050,7 @@ function openEditModal(id){
     document.getElementById('f_constraintType').value = t.constraintType==='fixed' ? 'fixed' : '';
     document.getElementById('f_constraintDate').value = t.constraintDate || '';
     document.getElementById('f_constraintDate').style.display = t.constraintType==='fixed' ? 'block' : 'none';
+    document.getElementById('f_constraintHint').style.display = t.constraintType==='fixed' ? 'block' : 'none';
     updateRespDisplay();
     fillPredList(id, t.preds||[]);
     onFParentChange();
@@ -5102,11 +5125,13 @@ function onMilestoneToggle(){
     document.getElementById('f_constraintType').value = '';
     document.getElementById('f_constraintDate').value = '';
     document.getElementById('f_constraintDate').style.display = 'none';
+    document.getElementById('f_constraintHint').style.display = 'none';
   }
 }
 function onConstraintTypeChange(){
   const isFixed = document.getElementById('f_constraintType').value === 'fixed';
   document.getElementById('f_constraintDate').style.display = isFixed ? 'block' : 'none';
+  document.getElementById('f_constraintHint').style.display = isFixed ? 'block' : 'none';
 }
 function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
 
