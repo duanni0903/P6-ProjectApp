@@ -254,6 +254,9 @@
   .wbs-mgmt-btn{border:none; background:none; color:var(--text-dim); cursor:pointer; padding:3px 5px; border-radius:5px; font-size:13px; line-height:1; display:flex; align-items:center;}
   .wbs-mgmt-btn:hover:not(:disabled){background:#e2e8f0; color:var(--text);}
   .wbs-mgmt-btn:disabled{opacity:.28; cursor:not-allowed;}
+  .wbs-mgmt-collapse-btn{flex:none; width:16px; cursor:pointer; color:var(--text-dim); font-size:10px; margin-right:3px; display:inline-flex; align-items:center; justify-content:center;}
+  .wbs-mgmt-collapse-btn:hover{color:var(--text);}
+  .wbs-mgmt-toolbar{display:flex; gap:6px; margin:-4px 0 8px;}
 
   /* v33: Timescale dialog — per-tier unit/mode rows */
   .modal-timescale{width:560px;}
@@ -719,7 +722,11 @@
 <div class="overlay" id="wbsMgmtOverlay">
   <div class="modal wbs-mgmt-modal">
     <h2>WBS 結構管理</h2>
-    <div class="hint" style="margin:-8px 0 12px;">在這裡可以直接改名、用 ⇥/⇤ 調整升降階層、用 ▲/▼ 調整同層顯示順序 — 所有調整都會立刻反映到主表格與甘特圖，WBS 編號會自動重新計算。</div>
+    <div class="hint" style="margin:-8px 0 12px;">在這裡可以直接改名、用 ⇥/⇤ 調整升降階層、用 ▲/▼ 調整同層顯示順序 — 所有調整都會立刻反映到主表格與甘特圖，WBS 編號會自動重新計算。點列表左邊的 ▼/▶ 可摺疊/展開單一項目（跟主表格共用同一個展開狀態）。</div>
+    <div class="wbs-mgmt-toolbar">
+      <button class="btn" onclick="wbsMgmtCollapseAll()" title="把所有有子任務的項目全部摺疊起來">全部摺疊</button>
+      <button class="btn" onclick="wbsMgmtExpandAll()" title="把所有項目全部展開">全部展開</button>
+    </div>
     <div class="wbs-mgmt-list" id="wbsMgmtList"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeWbsMgmt()">關閉</button>
@@ -1746,6 +1753,10 @@ async function loadFromSheet(){
         parent: (t.parent===null || t.parent===undefined || t.parent==='') ? null : String(t.parent),
         preds: (t.preds||[]).map(p=>({...p, id:String(p.id)})),
       }));
+      // v73: repair array order to match the real parent/child tree structure — see
+      // normalizeTaskOrder()'s own comment for why this matters (older/legacy project data can have
+      // drifted out of the "array order = tree order" invariant several other functions rely on).
+      normalizeTaskOrder();
       // idCounter only needs to stay ahead of existing PLAIN-INTEGER ids — a custom alphanumeric id
       // (or a non-sequential one) doesn't affect it; genNextId()'s collision check covers those anyway
       idCounter = tasks.reduce((m,t)=>{
@@ -1980,6 +1991,33 @@ function recomputeWbsNumbers(){
 function collectSubtree(id, set){
   set.add(id);
   tasks.filter(t=>t.parent===id).forEach(k=>collectSubtree(k.id, set));
+}
+// v73: rebuilds the `tasks` array into tree-contiguous order (every parent immediately followed by
+// its own children, each subtree one unbroken block) based purely on current `.parent` values —
+// mirrors the exact same recursive walk visibleRows() already uses for display, just applied to the
+// real array instead of a disposable render-time list. WBS codes (recomputeWbsNumbers()) are always
+// computed purely from `.parent`, so they're correct regardless of array order — but several OTHER
+// things quietly assume array order already IS tree order: the WBS 結構管理 dialog's list (fixed
+// separately to do its own walk, belt-and-suspenders), and more importantly indentTask()/outdentTask()/
+// moveSiblingUp()/moveSiblingDown() via subtreeBlockBounds()/swapSiblingBlocks(), which grab an index
+// RANGE and assume everything inside it belongs to the subtree — if the array drifted out of
+// contiguous order (e.g. rows that predate this invariant, or edited directly in the Google Sheet),
+// those functions could silently scoop up and reorder unrelated tasks caught in between. Called once
+// right after tasks load from the Sheet (loadFromSheet()) so any such project is transparently
+// repaired on every load — pure in-memory reorder of the same task objects, no field value changes,
+// nothing lost (any task whose parent id doesn't match anything, which shouldn't normally happen, is
+// still kept — just appended as a top-level row instead of silently dropped).
+function normalizeTaskOrder(){
+  const out = [];
+  const seen = new Set();
+  (function walk(parentId){
+    tasks.filter(t=>t.parent===parentId && !seen.has(t.id)).forEach(t=>{
+      out.push(t); seen.add(t.id);
+      walk(t.id);
+    });
+  })(null);
+  tasks.forEach(t=>{ if(!seen.has(t.id)){ out.push(t); seen.add(t.id); } });
+  tasks = out;
 }
 // any task currently without children is treated as a leaf and must carry valid leaf fields —
 // this is the safety net for a task that reverts from summary back to leaf (its last child
@@ -5169,32 +5207,41 @@ function openWbsMgmt(){
 function closeWbsMgmt(){
   document.getElementById('wbsMgmtOverlay').classList.remove('open');
 }
-// tasks 陣列本身就是依照目前的樹狀顯示順序排列（父節點永遠在所有子節點之前、整個子樹為連續區塊），
-// 所以縮排深度只要沿著 parent 鏈往上數即可，不需要額外維護一份 depth 欄位。
-function wbsMgmtDepthOf(t){
-  let d = 0, pid = t.parent;
-  while(pid !== null){
-    const pt = tasks.find(x=>x.id===pid);
-    if(!pt) break;
-    d++; pid = pt.parent;
-  }
-  return d;
-}
+// v73: 這裡曾經假設 tasks 陣列本身就是依照目前的樹狀顯示順序排列（父節點永遠在所有子節點之前、整個
+// 子樹為連續區塊），直接用 tasks.map() 依原始陣列順序畫出來——這個假設對「每一次調整階層都是透過
+// indentTask()/outdentTask()/moveSiblingUp()/moveSiblingDown() 操作」的資料成立，但對比較舊、可能是
+// 用別的方式（例如直接編輯 Google Sheet、或更早期版本）建立起來的專案資料不一定成立：WBS 編號本身
+// （recomputeWbsNumbers()）永遠是純粹依照 parent 關係算出來的、不受陣列順序影響，所以編號本身沒有錯，
+// 但如果陣列順序跟真正的樹狀結構對不起來，直接依陣列順序畫出來的清單看起來就會「亂跳」（例如 1.1 的
+// 子任務卻排在 2、3 後面）——這正是 Ni 回報「WBS呈現怪怪的」的根本原因，不是資料本身壞掉，是這個視窗
+// 畫的時候用錯了順序。改成跟 visibleRows() 一樣，用 parent 關係做真正的遞迴走訪（walk()），保證畫出來
+// 的順序永遠是正確的樹狀順序，不管底層陣列實際排列方式為何；也因此這裡的縮排深度改成走訪過程中自然算出
+// 來，不用再另外沿 parent 鏈往上數。同時支援獨立的展開/摺疊（沿用主表格同一份 collapsed 狀態，兩邊是
+// 同一個概念，彼此同步）。
 function renderWbsMgmtList(){
   const list = document.getElementById('wbsMgmtList');
   if(!list) return;
-  list.innerHTML = tasks.length ? tasks.map(t=>{
-    const depth = wbsMgmtDepthOf(t);
+  const rows = [];
+  (function walk(parentId, depth){
+    tasks.filter(t=>t.parent===parentId).forEach(t=>{
+      rows.push({ t, depth });
+      if(hasKids(t) && !collapsed[t.id]) walk(t.id, depth+1);
+    });
+  })(null, 0);
+  list.innerHTML = rows.length ? rows.map(({t, depth})=>{
     const siblings = tasks.filter(x=>x.parent===t.parent);
     const idx = siblings.findIndex(x=>x.id===t.id);
     const isFirst = idx<=0;
     const isLast = idx<0 || idx>=siblings.length-1;
     const summary = hasKids(t);
+    const collapseArrow = summary
+      ? `<span class="wbs-mgmt-collapse-btn" title="${collapsed[t.id]?'展開子任務':'摺疊子任務'}" onclick="event.stopPropagation(); toggleCollapse('${t.id}'); renderWbsMgmtList();">${collapsed[t.id]?'▶':'▼'}</span>`
+      : `<span class="wbs-mgmt-collapse-btn" style="visibility:hidden">▼</span>`;
     return `
       <div class="wbs-mgmt-row${summary?' wbs-mgmt-summary':''}">
         <span class="wbs-mgmt-code">${t.wbs||''}</span>
-        <input type="text" class="wbs-mgmt-name" style="padding-left:${7+depth*18}px" value="${escAttr(t.name)}"
-          onclick="event.stopPropagation()" onblur="commitWbsMgmtNameEdit(this,'${t.id}')" onkeydown="wbsMgmtNameKeydown(event,this)">
+        <span style="flex:1; min-width:0; padding-left:${depth*18}px; display:flex; align-items:center;">${collapseArrow}<input type="text" class="wbs-mgmt-name" value="${escAttr(t.name)}"
+          onclick="event.stopPropagation()" onblur="commitWbsMgmtNameEdit(this,'${t.id}')" onkeydown="wbsMgmtNameKeydown(event,this)"></span>
         <span class="wbs-mgmt-btns">
           <button type="button" class="wbs-mgmt-btn" ${isFirst?'disabled':''} title="在同層往上移一位" onclick="moveSiblingUp('${t.id}'); renderWbsMgmtList();">▲</button>
           <button type="button" class="wbs-mgmt-btn" ${isLast?'disabled':''} title="在同層往下移一位" onclick="moveSiblingDown('${t.id}'); renderWbsMgmtList();">▼</button>
@@ -5203,6 +5250,20 @@ function renderWbsMgmtList(){
         </span>
       </div>`;
   }).join('') : '<div class="rel-pick-empty">尚無任務</div>';
+}
+// v73: 全部摺疊/全部展開——只影響「有子任務」的列，跟主表格共用同一份 collapsed 狀態，所以這裡按了之後
+// 回到主表格/甘特圖也會是同樣的展開狀態，反之亦然。
+function wbsMgmtCollapseAll(){
+  tasks.forEach(t=>{ if(hasKids(t)) collapsed[t.id] = true; });
+  saveUiState();
+  renderWbsMgmtList();
+  renderTable(); renderGantt();
+}
+function wbsMgmtExpandAll(){
+  tasks.forEach(t=>{ if(hasKids(t)) collapsed[t.id] = false; });
+  saveUiState();
+  renderWbsMgmtList();
+  renderTable(); renderGantt();
 }
 function wbsMgmtNameKeydown(e, input){
   if(e.key==='Enter'){ input.blur(); } // 觸發 onblur -> commitWbsMgmtNameEdit
