@@ -3104,7 +3104,7 @@ function renderTable(){
         ${tds}
         <td class="row-actions">
           <button class="icon-btn" onclick="event.stopPropagation(); openEditModal('${t.id}')" title="編輯">✎</button>
-          <button class="icon-btn" onclick="event.stopPropagation(); toggleTaskDisabled('${t.id}')" title="${t.disabled?'恢復：重新納入排程計算與統計數字':'暫停：排除在排程計算(CPM)與統計數字之外（不是刪除，資料保留，列表會變灰）'}">${t.disabled?'▶':'⏸'}</button>
+          <button class="icon-btn" onclick="event.stopPropagation(); toggleTaskDisabled('${t.id}')" title="${t.disabled?(isSum?'恢復：連同底下所有子任務一起重新納入排程計算與統計數字':'恢復：重新納入排程計算與統計數字'):(isSum?'暫停：連同底下所有子任務一起排除在排程計算(CPM)與統計數字之外（不是刪除，資料保留，列表會變灰）':'暫停：排除在排程計算(CPM)與統計數字之外（不是刪除，資料保留，列表會變灰）')}">${t.disabled?'▶':'⏸'}</button>
           <button class="icon-btn" ${canOutdentOf(t)?'':'disabled'} onclick="event.stopPropagation(); outdentTask('${t.id}')" title="降一階：退回上一層（可退回成主要任務）">${OUTDENT_ICON}</button>
           <button class="icon-btn" ${canIndentOf(t)?'':'disabled'} onclick="event.stopPropagation(); indentTask('${t.id}')" title="升一階：變成上一列的子任務">${INDENT_ICON}</button>
         </td>
@@ -3284,16 +3284,24 @@ function toggleCollapse(id){ collapsed[id]=!collapsed[id]; saveUiState(); render
 // v停用: 暫停（停用）一個任務——不是刪除，資料全部保留；只是讓它完全跳出 CPM 排程計算（見
 // computeSchedule()：不佔要徑、不影響前後置任務的推算，後續任務會把它當作不存在）以及預算/進度/
 // 統計卡片（getStats()/computeOwners()/rollup()），主表格/甘特圖上用灰色＋刪除線標示提醒「先別管
-// 這個」。目前只對單一（任意一列，含上層任務）有效——切換一個有子任務的上層任務時，只有那一列本身
-// 的外觀/統計歸類會變，不會自動連動停用底下所有子任務（子任務仍照常排程、照常計入統計），這點跟
-// 「升/降階層」會整個子樹一起動不同，是刻意的簡化：整組一起停用的語意還沒有定義清楚，先只做「單一
-// 任務暫停」，真的需要整組停用再請 Ni 提。
+// 這個」。v停用2: 切換一個有子任務的上層任務時，會連動整個子樹（用既有的 collectSubtree() 收集
+// 自己＋所有子孫），整批設成跟上層任務「切換後」一致的新狀態——暫停上層＝整組一起變灰跳出排程/統計，
+// 恢復上層＝整組一起恢復，即使某些子任務之前是「個別」被暫停的，也會被上層的恢復動作一起打開（這是
+// 刻意選的簡單、可預期語意：上層的開關＝整批的開關，不保留個別子任務的獨立停用歷史）。單一葉節點任務
+// （沒有子任務）維持原本「只影響自己這一列」的行為。
 function toggleTaskDisabled(id){
   if(!requireEdit()) return;
   const t = tasks.find(x=>x.id===id);
   if(!t) return;
   const _pre = snapshotTasks();
-  t.disabled = !t.disabled;
+  const newState = !t.disabled;
+  if(hasKids(t)){
+    const ids = new Set();
+    collectSubtree(t.id, ids);
+    tasks.forEach(x=>{ if(ids.has(x.id)) x.disabled = newState; });
+  } else {
+    t.disabled = newState;
+  }
   render();
   pushUndoSnapshot(_pre);
 }
