@@ -95,6 +95,11 @@
   table.wbs-table td{padding:0 8px; height:var(--row-h); border-bottom:1px solid #f1f5f9; white-space:nowrap; font-size:12.5px;}
   table.wbs-table tbody tr:hover{background:#f8fafc;}
   table.wbs-table tbody tr.critical-row td{background:var(--danger-bg);}
+  /* v停用: 停用（暫停）的任務整列變灰＋名稱加刪除線，跟「刪除」區別開來——資料還在，只是先不管它。
+     放在 .critical-row 之後、.summary-row 之前，所以「停用的要徑任務」（理論上不會發生，因為停用
+     的任務已強制 critical=false，但萬一哪天規則變了）跟「停用的上層任務」都還是以這條灰色樣式為準。 */
+  table.wbs-table tbody tr.task-disabled-row td{background:#f1f5f9; color:var(--text-faint);}
+  table.wbs-table tbody tr.task-disabled-row .task-name-text{text-decoration:line-through;}
   table.wbs-table tbody tr.summary-row td{font-weight:700; background:#f8fafc;}
   table.wbs-table tbody tr{cursor:pointer;}
   table.wbs-table tbody tr.chain-row td{background:#eef4ff !important; box-shadow:inset 0 0 0 1.5px #93c5fd;}
@@ -1480,7 +1485,8 @@ function computeOwners(){
     map[o.name] = {name:o.name, contact:o.contact||'', dept:o.dept||'',
       taskCount:0, inProgress:0, done:0, totalDuration:0, totalBudget:0, totalActual:0, criticalCount:0};
   });
-  tasks.filter(t=>!hasKids(t) && t.responsible).forEach(t=>{
+  // v停用: 負責人管理視窗裡的任務數/進度/預算等統計，跟頂部統計卡片一樣排除停用的任務。
+  tasks.filter(t=>!hasKids(t) && t.responsible && !t.disabled).forEach(t=>{
     const n = t.responsible;
     if(!map[n]) map[n] = {name:n, contact:'', dept:'', taskCount:0, inProgress:0, done:0, totalDuration:0, totalBudget:0, totalActual:0, criticalCount:0};
     const o = map[n];
@@ -1530,6 +1536,8 @@ function stripForSync(t){
     id:t.id, parent:t.parent===undefined?null:t.parent, name:t.name||'',
     duration:t.duration, responsible:t.responsible||'', budget:t.budget||0,
     actual:t.actual||0, progress:t.progress||0, milestone:!!t.milestone,
+    // v停用: 跟 milestone 一樣是真正的輸入欄位，要原封不動同步到 Google Sheet 跟 undo/redo。
+    disabled: !!t.disabled,
     preds:(t.preds||[]).map(p=>({id:p.id, type:p.type, lag:p.lag||0})),
     successor,
     // v62: milestone date-constraint mode — 'fixed' + an absolute date, or '' (empty) for the normal
@@ -1569,6 +1577,9 @@ function snapshotTasks(){
     id:t.id, parent:t.parent===undefined?null:t.parent, name:t.name||'',
     duration:t.duration, responsible:t.responsible||'', budget:t.budget||0,
     actual:t.actual||0, progress:t.progress||0, milestone:!!t.milestone,
+    // v停用: 同樣是必須隨 undo/redo 原封不動復原的真正輸入欄位——漏了這個，切換停用狀態後按復原，
+    // 停用旗標會悄悄消失（tasks 陣列被整個換成這份 snapshot 的欄位，沒列出來的欄位就是沒了）。
+    disabled: !!t.disabled,
     constraintType: t.constraintType || '', constraintDate: t.constraintDate || '',
     // v66: 實際開始/實際完成日 (user input) + 基準線 startDate/endDate snapshot (set by setBaseline())
     actualStart: t.actualStart || '', actualFinish: t.actualFinish || '',
@@ -2317,7 +2328,9 @@ function computeSchedule(){
   order.forEach(t=>{
     let es = 0;
     (t.preds||[]).forEach(p=>{
-      const pred = byId[p.id]; if(!pred) return;
+      // v停用: 前置任務若已「停用/暫停」，整條關係直接跳過，當作它不存在——後續任務的開始日完全不會
+      // 被一個停用的前置任務往後推（不管它自己的 preds 是否存在，重點是這個 PREDECESSOR 本身被停用）。
+      const pred = byId[p.id]; if(!pred || pred.disabled) return;
       const lag = p.lag||0;
       let c;
       switch(p.type){
@@ -2362,7 +2375,10 @@ function computeSchedule(){
       t.EF = t.ES + t.duration;
     }
   });
-  const projectDuration = Math.max(0, ...order.map(t=>t.EF));
+  // v停用: 停用的任務不計入專案總工期——否則一個被暫停、排到很後面的任務仍會把 projectDuration 往後
+  // 拖，連帶讓所有「沒有後續任務」的其他任務的最晚完成日（下面 backward pass 的 fallback）被灌入假的
+  // 浮時，等於停用的任務還是間接影響了別人的排程，跟「完全跳過排程計算」的要求矛盾。
+  const projectDuration = Math.max(0, ...order.filter(t=>!t.disabled).map(t=>t.EF));
   // v專案完工日期: when a 目標完工日 (Must-Finish-By) constraint is set, every terminal task (no
   // successors) anchors its LF to THAT date instead of the project's own natural finish (projectDuration
   // above) — see the backward pass below. +1 matches the existing ES/EF/endDate convention throughout
@@ -2383,7 +2399,9 @@ function computeSchedule(){
   order.forEach(t=>{
     let es = 0;
     (t.preds||[]).forEach(p=>{
-      const pred = byId[p.id]; if(!pred) return;
+      // v停用: 跟上面「預估」那條 forward pass 一樣的規則——停用的前置任務不影響「最早開始/最早完成」
+      // 這個純計畫時程。
+      const pred = byId[p.id]; if(!pred || pred.disabled) return;
       const lag = p.lag||0;
       let c;
       switch(p.type){
@@ -2404,7 +2422,12 @@ function computeSchedule(){
 
   // successor links (with type/lag) for the backward pass
   const succLinks = {}; order.forEach(t=>succLinks[t.id]=[]);
-  order.forEach(t=>(t.preds||[]).forEach(p=>{ if(succLinks[p.id]) succLinks[p.id].push({succ:t, type:p.type, lag:p.lag||0}); }));
+  order.forEach(t=>{
+    // v停用: 這一列任務（身為「後續任務」）若已停用，它的前置任務關係整批跳過登記——這樣它的前置
+    // 任務算 LF（最晚完成）時，完全不會被這個已停用的後續任務「往回推」限制住，等於它當作不存在。
+    if(t.disabled) return;
+    (t.preds||[]).forEach(p=>{ if(succLinks[p.id]) succLinks[p.id].push({succ:t, type:p.type, lag:p.lag||0}); });
+  });
 
   // backward pass: unify every relationship type into a constraint on LF
   [...order].reverse().forEach(t=>{
@@ -2449,6 +2472,10 @@ function computeSchedule(){
     t.LS = t.LF - t.duration;
     t.float = t.LS - t.ES;
     t.critical = t.float <= 0;
+    // v停用: 停用的任務永遠不算要徑——不管上面算出來的浮時數字剛好是多少，都強制視為非關鍵，呼應
+    // 「不佔要徑」的要求。它自己的 ES/EF/LS/LF/startDate/endDate 仍照常算出來，好讓表格/甘特圖還是
+    // 能顯示一個位置（只是外觀會變灰），只有「算不算要徑」這個結論被覆寫。
+    if(t.disabled) t.critical = false;
     // ES/EF/LS/LF are integer offsets from PROJECT_START, in calendar days — see PROJECT_DAY_LIST above.
     t.startDate = PROJECT_DAY_LIST[t.ES];
     t.endDate = PROJECT_DAY_LIST[Math.max(t.ES, t.EF-1)];
@@ -2468,15 +2495,21 @@ function computeSchedule(){
     const kids = tasks.filter(t=>t.parent===s.id);
     if(!kids.length) return; // leaf: schedule already set by CPM above
     kids.forEach(k=>{ if(hasKids(k)) rollup(k); });
+    // 時間跨度（甘特圖上這一列要畫多長）仍然看「所有」子任務，包含停用的——停用只代表「先別管它」，
+    // 不代表這個子任務從主表格/甘特圖上消失，上層的時間軸範圍沒道理因為它暫停就突然縮小。
     s.startDate = new Date(Math.min(...kids.map(k=>k.startDate.getTime())));
     s.endDate = new Date(Math.max(...kids.map(k=>k.endDate.getTime())));
     s.planStartDate = new Date(Math.min(...kids.map(k=>k.planStartDate.getTime())));
     s.planEndDate = new Date(Math.max(...kids.map(k=>k.planEndDate.getTime())));
-    s.budget = kids.reduce((a,k)=>a+(k.budget||0),0);
-    s.actual = kids.reduce((a,k)=>a+(k.actual||0),0);
-    const wsum = kids.reduce((a,k)=>a+(k.budget||0),0);
-    s.progress = wsum>0 ? Math.round(kids.reduce((a,k)=>a+(k.progress||0)*(k.budget||0),0)/wsum)
-                         : Math.round(kids.reduce((a,k)=>a+(k.progress||0),0)/kids.length);
+    // v停用: 但「預算/實際/進度」這幾個統計數字，跟頂部統計卡片一樣要排除停用的子任務，否則一個暫停
+    // 的子任務還是會灌進上層的預算/進度總和裡，跟「排除在統計之外」的要求矛盾。全部子任務都停用時
+    // 退回 0（沒有東西可以加總），不要除以零。
+    const activeKids = kids.filter(k=>!k.disabled);
+    s.budget = activeKids.reduce((a,k)=>a+(k.budget||0),0);
+    s.actual = activeKids.reduce((a,k)=>a+(k.actual||0),0);
+    const wsum = activeKids.reduce((a,k)=>a+(k.budget||0),0);
+    s.progress = wsum>0 ? Math.round(activeKids.reduce((a,k)=>a+(k.progress||0)*(k.budget||0),0)/wsum)
+                         : (activeKids.length ? Math.round(activeKids.reduce((a,k)=>a+(k.progress||0),0)/activeKids.length) : 0);
     s.critical = kids.some(k=>k.critical);
   }
   tasks.filter(t=>t.parent===null && hasKids(t)).forEach(rollup);
@@ -2488,7 +2521,9 @@ function computeSchedule(){
 
 /* ---------- derived stats ---------- */
 function getStats(){
-  const leaves = tasks.filter(t=>!hasKids(t));
+  // v停用: 頂部統計卡片（總預算/已花費/完成率/要徑任務數…）跟停用任務無關——停用的任務在這裡視為
+  // 不存在，就像它被暫時拿掉一樣。
+  const leaves = tasks.filter(t=>!hasKids(t) && !t.disabled);
   const totalBudget = leaves.reduce((a,t)=>a+(t.budget||0),0);
   const totalActual = leaves.reduce((a,t)=>a+(t.actual||0),0);
   const overallProgress = totalBudget>0
@@ -3062,10 +3097,11 @@ function renderTable(){
     const stateCls = `${t.id===selectedId?' selected-row':''}${t.id===clipboardId?' cut-row':''}${multiSelectIds.includes(t.id)?' chain-row':''}`;
     const tds = cols.map(k=>colTdHtml(k, t, isSum, depth, arrow, diff)).join('');
     return `
-      <tr data-id="${t.id}" class="${isSum?'summary-row':''} ${t.critical?'critical-row':''}${stateCls}" onclick="selectRow('${t.id}', event)" oncontextmenu="showContextMenu(event, '${t.id}')">
+      <tr data-id="${t.id}" class="${isSum?'summary-row':''} ${t.critical?'critical-row':''}${t.disabled?' task-disabled-row':''}${stateCls}" onclick="selectRow('${t.id}', event)" oncontextmenu="showContextMenu(event, '${t.id}')">
         ${tds}
         <td class="row-actions">
           <button class="icon-btn" onclick="event.stopPropagation(); openEditModal('${t.id}')" title="編輯">✎</button>
+          <button class="icon-btn" onclick="event.stopPropagation(); toggleTaskDisabled('${t.id}')" title="${t.disabled?'恢復：重新納入排程計算與統計數字':'暫停：排除在排程計算(CPM)與統計數字之外（不是刪除，資料保留，列表會變灰）'}">${t.disabled?'▶':'⏸'}</button>
           <button class="icon-btn" ${canOutdentOf(t)?'':'disabled'} onclick="event.stopPropagation(); outdentTask('${t.id}')" title="降一階：退回上一層（可退回成主要任務）">${OUTDENT_ICON}</button>
           <button class="icon-btn" ${canIndentOf(t)?'':'disabled'} onclick="event.stopPropagation(); indentTask('${t.id}')" title="升一階：變成上一列的子任務">${INDENT_ICON}</button>
         </td>
@@ -3241,6 +3277,23 @@ document.addEventListener('click', function(e){
 });
 
 function toggleCollapse(id){ collapsed[id]=!collapsed[id]; saveUiState(); renderTable(); renderGantt(); }
+
+// v停用: 暫停（停用）一個任務——不是刪除，資料全部保留；只是讓它完全跳出 CPM 排程計算（見
+// computeSchedule()：不佔要徑、不影響前後置任務的推算，後續任務會把它當作不存在）以及預算/進度/
+// 統計卡片（getStats()/computeOwners()/rollup()），主表格/甘特圖上用灰色＋刪除線標示提醒「先別管
+// 這個」。目前只對單一（任意一列，含上層任務）有效——切換一個有子任務的上層任務時，只有那一列本身
+// 的外觀/統計歸類會變，不會自動連動停用底下所有子任務（子任務仍照常排程、照常計入統計），這點跟
+// 「升/降階層」會整個子樹一起動不同，是刻意的簡化：整組一起停用的語意還沒有定義清楚，先只做「單一
+// 任務暫停」，真的需要整組停用再請 Ni 提。
+function toggleTaskDisabled(id){
+  if(!requireEdit()) return;
+  const t = tasks.find(x=>x.id===id);
+  if(!t) return;
+  const _pre = snapshotTasks();
+  t.disabled = !t.disabled;
+  render();
+  pushUndoSnapshot(_pre);
+}
 
 /* ---------- v61: 列顯示 management panel — the ONLY place row hide/show happens ----------
    An earlier version put a checkbox directly in the WBS table's leftmost column, but that cluttered
@@ -4139,6 +4192,11 @@ function renderGantt(){
   rows.forEach((t,i)=>{
     const y = headerH + i*rowH;
     const cy = y + rowH/2;
+    // v停用: build this row's shapes into its own buffer first (instead of appending straight into
+    // `bars`), so a disabled task's entire row — baseline bar included — can be wrapped in one dimmed
+    // <g> at the end. That's also why the old early `return;`s for the summary/milestone cases below
+    // became an if/else-if/else chain: a `return` here would skip the wrap-and-append line after it.
+    let rowSvg = '';
     // v66/v計畫時程2: 基準線（Baseline）— a thin bar drawn beneath the live bar/summary shape, showing the
     // frozen planStartDate/planEndDate (pure plan, not forecast) captured by setBaseline(). A real-world
     // delay shows up as a visible gap between this bar and the live (forecast) one above it. Drawn here
@@ -4152,51 +4210,55 @@ function renderGantt(){
       if(bsIdx!==null && beIdx!==null){
         const bx0 = bsIdx*pxPerDay, bx1 = (beIdx+1)*pxPerDay;
         const bw = Math.max(3, bx1-bx0);
-        bars += `<rect class="baseline-bar" x="${bx0}" y="${cy+10}" width="${bw}" height="5" rx="2"></rect>`;
+        rowSvg += `<rect class="baseline-bar" x="${bx0}" y="${cy+10}" width="${bw}" height="5" rx="2"></rect>`;
       }
     }
     if(hasKids(t)){
       const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
       const sa = gcShapeAttrs('summary');
-      bars += `<rect ${sa} x="${x0}" y="${cy-4}" width="${Math.max(4,x1-x0)}" height="8" rx="2"></rect>`;
-      bars += `<polygon ${sa} points="${x0},${cy-4} ${x0+7},${cy-4} ${x0},${cy+6}"></polygon>`;
-      bars += `<polygon ${sa} points="${x1},${cy-4} ${x1-7},${cy-4} ${x1},${cy+6}"></polygon>`;
-      return;
+      rowSvg += `<rect ${sa} x="${x0}" y="${cy-4}" width="${Math.max(4,x1-x0)}" height="8" rx="2"></rect>`;
+      rowSvg += `<polygon ${sa} points="${x0},${cy-4} ${x0+7},${cy-4} ${x0},${cy+6}"></polygon>`;
+      rowSvg += `<polygon ${sa} points="${x1},${cy-4} ${x1-7},${cy-4} ${x1},${cy+6}"></polygon>`;
+    } else {
+      // v43: 關鍵路徑 styling only actually applies when ganttShowCriticalHighlight is on — with it off, a
+      // task renders exactly as if t.critical were false (falls back to its plain status color), even
+      // though t.critical itself is untouched (still drives the toolbar's "只顯示關鍵路徑" filter etc).
+      // (also always false for a 停用 task — computeSchedule() forces t.critical=false for those.)
+      const critStyled = t.critical && ganttShowCriticalHighlight;
+      if(t.milestone){
+        const x = xOfDate(t.startDate)+pxPerDay/2;
+        const key = t.progress>=100 ? 'completed' : 'milestone';
+        const ma = gcShapeAttrs(key);
+        const critStroke = critStyled ? `stroke="${ganttStyles.critical.color}" stroke-width="1.6"` : '';
+        rowSvg += `<rect x="${x-6}" y="${cy-6}" width="12" height="12" rx="2" transform="rotate(45 ${x} ${cy})" ${ma} ${critStroke}></rect>`;
+      } else {
+        const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
+        const w = Math.max(3, x1-x0);
+        const fillKey = t.progress>=100 ? 'completed' : (t.progress>0 ? 'inProgress' : 'notStarted');
+        rowSvg += `<rect class="bar-track" x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4" ${critStyled?`stroke="${ganttStyles.critical.color}" stroke-width="1.6"`:'stroke="#e2e8f0" stroke-width="1"'}></rect>`;
+        // v41: always draw the "remainder" segment first (full bar width) so that category's color/pattern
+        // customization is visible in the chart — previously nothing was drawn for it at all, so its custom
+        // color/pattern never showed. The progress-fill segment (drawn on top, up to fw) then covers exactly
+        // the completed portion, leaving the remainder showing underneath.
+        // v42: a not-started (progress 0) task that is ALSO 關鍵路徑 (float/浮時 = 0) uses the 關鍵路徑
+        // fill/pattern for that remainder instead of 未開始's — otherwise this same full-width remainder
+        // rect, drawn solid on top, was visually swallowing almost all of the thin critical outline stroke
+        // drawn just above it, so a not-started critical task looked just like an ordinary grey one.
+        // v43: only when critStyled — with "顯示要徑" off, it falls back to plain 未開始, per the user's request.
+        const remainderKey = (critStyled && t.progress===0) ? 'critical' : 'notStarted';
+        rowSvg += `<rect ${gcShapeAttrs(remainderKey)} x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4"></rect>`;
+        if(t.progress>0){
+          const fw = Math.max(0, w*(t.progress/100));
+          rowSvg += `<rect ${gcShapeAttrs(fillKey)} x="${x0}" y="${cy-9}" width="${fw}" height="18" rx="4"></rect>`;
+        }
+        if(w>34){
+          rowSvg += `<text class="bar-label" x="${x0+6}" y="${cy+3}" fill="${t.progress>50?'#fff':'#334155'}">${t.progress}%</text>`;
+        }
+      }
     }
-    // v43: 關鍵路徑 styling only actually applies when ganttShowCriticalHighlight is on — with it off, a
-    // task renders exactly as if t.critical were false (falls back to its plain status color), even
-    // though t.critical itself is untouched (still drives the toolbar's "只顯示關鍵路徑" filter etc).
-    const critStyled = t.critical && ganttShowCriticalHighlight;
-    if(t.milestone){
-      const x = xOfDate(t.startDate)+pxPerDay/2;
-      const key = t.progress>=100 ? 'completed' : 'milestone';
-      const ma = gcShapeAttrs(key);
-      const critStroke = critStyled ? `stroke="${ganttStyles.critical.color}" stroke-width="1.6"` : '';
-      bars += `<rect x="${x-6}" y="${cy-6}" width="12" height="12" rx="2" transform="rotate(45 ${x} ${cy})" ${ma} ${critStroke}></rect>`;
-      return;
-    }
-    const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
-    const w = Math.max(3, x1-x0);
-    const fillKey = t.progress>=100 ? 'completed' : (t.progress>0 ? 'inProgress' : 'notStarted');
-    bars += `<rect class="bar-track" x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4" ${critStyled?`stroke="${ganttStyles.critical.color}" stroke-width="1.6"`:'stroke="#e2e8f0" stroke-width="1"'}></rect>`;
-    // v41: always draw the "remainder" segment first (full bar width) so that category's color/pattern
-    // customization is visible in the chart — previously nothing was drawn for it at all, so its custom
-    // color/pattern never showed. The progress-fill segment (drawn on top, up to fw) then covers exactly
-    // the completed portion, leaving the remainder showing underneath.
-    // v42: a not-started (progress 0) task that is ALSO 關鍵路徑 (float/浮時 = 0) uses the 關鍵路徑
-    // fill/pattern for that remainder instead of 未開始's — otherwise this same full-width remainder
-    // rect, drawn solid on top, was visually swallowing almost all of the thin critical outline stroke
-    // drawn just above it, so a not-started critical task looked just like an ordinary grey one.
-    // v43: only when critStyled — with "顯示要徑" off, it falls back to plain 未開始, per the user's request.
-    const remainderKey = (critStyled && t.progress===0) ? 'critical' : 'notStarted';
-    bars += `<rect ${gcShapeAttrs(remainderKey)} x="${x0}" y="${cy-9}" width="${w}" height="18" rx="4"></rect>`;
-    if(t.progress>0){
-      const fw = Math.max(0, w*(t.progress/100));
-      bars += `<rect ${gcShapeAttrs(fillKey)} x="${x0}" y="${cy-9}" width="${fw}" height="18" rx="4"></rect>`;
-    }
-    if(w>34){
-      bars += `<text class="bar-label" x="${x0+6}" y="${cy+3}" fill="${t.progress>50?'#fff':'#334155'}">${t.progress}%</text>`;
-    }
+    // v停用: 停用的任務在甘特圖上整條（含基準線）都用半透明包起來，跟主表格的灰色列呼應——座標/
+    // 形狀完全不變，只是外觀變淡；不影響任何互動（點擊/拖曳等邏輯都沒有針對它特別處理）。
+    bars += t.disabled ? `<g opacity="0.35">${rowSvg}</g>` : rowSvg;
   });
 
   // dependency arrows (FS / SS / FF / SF, with lag/lead labels)
@@ -4711,7 +4773,8 @@ function isHiddenByRowOrAncestor(t){
   return false;
 }
 function getMilestoneTasks(){
-  return tasks.filter(t=>t.milestone && t.startDate && !isHiddenByRowOrAncestor(t)).slice().sort((a,b)=>a.startDate-b.startDate);
+  // v停用: 里程碑時程圖匯出也排除停用的里程碑——跟其他統計/報表口徑一致。
+  return tasks.filter(t=>t.milestone && t.startDate && !t.disabled && !isHiddenByRowOrAncestor(t)).slice().sort((a,b)=>a.startDate-b.startDate);
 }
 // done (progress 100) > overdue (start date already passed) > on the critical path > has some
 // progress logged > otherwise not started yet. Overdue/critical both read as "needs attention" (red)
