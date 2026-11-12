@@ -1815,7 +1815,10 @@ const COLUMN_META = {
   parentRef:  {label:'上層任務(ID)', width:90},
   milestoneFlag: {label:'里程碑', width:56},
 };
-const ACTIONS_COL_WIDTH = 126;
+// v停用: 126 -> 164，因為這一欄現在塞 4 個圖示按鈕（原本編輯/降階/升階 3 個，新增了 ⏸/▶ 暫停切換）——
+// table-layout:fixed 下，<td> 寬度完全由這個常數決定，不會自動撐開，沒放寬的話第 4 個按鈕根本沒地方畫，
+// 等於「看不到」（這正是 Ni 回報「找不到暫停按鈕」的原因）。
+const ACTIONS_COL_WIDTH = 164;
 let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden interleaved
 // parentRef / milestoneFlag are already visible another way (tree indentation / ◆ icon on the name),
 // so they start hidden to avoid clutter — everything else backend-side is shown by default.
