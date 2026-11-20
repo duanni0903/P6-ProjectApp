@@ -2731,6 +2731,38 @@ function summaryDurationDays(t){
   if(!t.startDate || !t.endDate) return '';
   return Math.max(1, Math.round((t.endDate - t.startDate) / 86400000) + 1);
 }
+// v75: 母任務的「實際開始/實際完成/實際工期」原本永遠空白——這兩個實際日期只有葉節點會直接輸入，
+// rollup() 從來沒有把它們往上彙總過（跟 startDate/endDate/planStartDate/planEndDate 不一樣）。這裡
+// 用遞迴往下收集「整個子樹」所有葉節點（不管中間隔了幾層子母任務）已經填的實際開始/實際完成，取最早
+// 的開始、最晚的完成——跟 startDate/endDate 的彙總邏輯一致，故意「包含已停用的子任務」（停用只是先別
+// 管它，不代表上層的實際時程範圍應該因此縮小，跟 budget/actual/progress 那種統計數字要排除停用是不同
+// 的考量）。純粹顯示用的即時計算，不寫回 t.actualStart/t.actualFinish 本身——那兩個欄位是真正的輸入
+// 值，會被 stripForSync()/snapshotTasks() 原封不動存回 Sheet／undo-redo，寫進去的話母任務會被誤判成
+// 「使用者自己填了實際日期」。有任何一個子孫葉節點完全沒填實際開始/實際完成，不影響其他葉節點的值
+// 照樣被採計（min/max 只看「有填的」那些）。
+function summaryActualRange(t){
+  const starts = [], finishes = [];
+  (function walk(parentId){
+    tasks.filter(x=>x.parent===parentId).forEach(k=>{
+      if(hasKids(k)) walk(k.id);
+      else {
+        if(k.actualStart) starts.push(k.actualStart);
+        if(k.actualFinish) finishes.push(k.actualFinish);
+      }
+    });
+  })(t.id);
+  return {
+    start: starts.length ? starts.reduce((a,b)=> a<b?a:b) : '', // 'YYYY-MM-DD' 字串排序即日期排序
+    finish: finishes.length ? finishes.reduce((a,b)=> a>b?a:b) : '',
+  };
+}
+function summaryActualDurationDays(t){
+  const { start, finish } = summaryActualRange(t);
+  if(!start || !finish) return '';
+  const s = dayIndexOfIsoDate(start), f = dayIndexOfIsoDate(finish);
+  if(s===null || f===null) return '';
+  return Math.max(1, f - s + 1);
+}
 // renders one <td> for a given column key + task row; kept in sync with renderTableHeader()'s
 // column list so header/body columns always line up regardless of current order/visibility
 function colTdHtml(key, t, isSum, depth, arrow, diff){
@@ -2757,11 +2789,17 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'forecastEnd': return `<td>${fmtROC(t.endDate)}</td>`;
     case 'lateStart': return `<td>${(t.lateStartDate && !t.milestone)?fmtROC(t.lateStartDate):''}</td>`;
     case 'lateFinish': return `<td>${t.lateFinishDate?fmtROC(t.lateFinishDate):''}</td>`;
-    case 'actualStart': return `<td>${isSum?'':fmtIsoRoc(t.actualStart)}</td>`;
-    case 'actualFinish': return `<td>${isSum?'':fmtIsoRoc(t.actualFinish)}</td>`;
-    case 'actualDur': return `<td>${(isSum || t.actualDuration==null)?'':t.actualDuration}</td>`;
-    case 'baselineStart': return `<td>${isSum?'':fmtIsoRoc(t.baselineStart)}</td>`;
-    case 'baselineEnd': return `<td>${isSum?'':fmtIsoRoc(t.baselineEnd)}</td>`;
+    case 'actualStart': return `<td>${isSum?fmtIsoRoc(summaryActualRange(t).start):fmtIsoRoc(t.actualStart)}</td>`;
+    case 'actualFinish': return `<td>${isSum?fmtIsoRoc(summaryActualRange(t).finish):fmtIsoRoc(t.actualFinish)}</td>`;
+    case 'actualDur': {
+      const v = isSum ? summaryActualDurationDays(t) : t.actualDuration;
+      return `<td>${v==null?'':v}</td>`;
+    }
+    // v75: 基準線開始/完成其實一直都有正確存值給母任務（setBaseline() 是對 tasks.forEach 全部任務下手，
+    // 用的 t.planStartDate/planEndDate 本來就已經是 rollup() 彙總好的值）——這裡的 isSum 判斷純粹是畫面
+    // 上多餘的隱藏，拿掉就對了，不需要額外計算。
+    case 'baselineStart': return `<td>${fmtIsoRoc(t.baselineStart)}</td>`;
+    case 'baselineEnd': return `<td>${fmtIsoRoc(t.baselineEnd)}</td>`;
     case 'dur': {
       if(isSum) return `<td title="彙總底下子任務的預估開始/預估完成算出來的天數，不是可直接輸入的欄位">${summaryDurationDays(t)}</td>`;
       if(t.milestone) return `<td title="里程碑工期固定為 0 天">${t.duration}</td>`; // fixed at 0, not directly editable
@@ -4483,11 +4521,14 @@ function cellCopyValue(key, t){
     case 'forecastEnd': return t.endDate ? fmtROC(t.endDate) : '';
     case 'lateStart': return (t.lateStartDate && !t.milestone) ? fmtROC(t.lateStartDate) : '';
     case 'lateFinish': return t.lateFinishDate ? fmtROC(t.lateFinishDate) : '';
-    case 'actualStart': return isSum ? '' : fmtIsoRoc(t.actualStart);
-    case 'actualFinish': return isSum ? '' : fmtIsoRoc(t.actualFinish);
-    case 'actualDur': return (isSum || t.actualDuration==null) ? '' : String(t.actualDuration);
-    case 'baselineStart': return isSum ? '' : fmtIsoRoc(t.baselineStart);
-    case 'baselineEnd': return isSum ? '' : fmtIsoRoc(t.baselineEnd);
+    case 'actualStart': return isSum ? fmtIsoRoc(summaryActualRange(t).start) : fmtIsoRoc(t.actualStart);
+    case 'actualFinish': return isSum ? fmtIsoRoc(summaryActualRange(t).finish) : fmtIsoRoc(t.actualFinish);
+    case 'actualDur': {
+      const v = isSum ? summaryActualDurationDays(t) : t.actualDuration;
+      return v==null ? '' : String(v);
+    }
+    case 'baselineStart': return fmtIsoRoc(t.baselineStart);
+    case 'baselineEnd': return fmtIsoRoc(t.baselineEnd);
     case 'dur': return isSum ? String(summaryDurationDays(t)) : String(t.duration!=null ? t.duration : '');
     case 'float': return isSum ? '' : String(t.float||0);
     case 'progress': return String(t.progress!=null ? t.progress : 0);
@@ -5101,8 +5142,8 @@ ${msLegendHtml(list.length + ' 個里程碑')}
   closeExportMenu();
 }
 
-// v74: 甘特圖匯出起訖日期——每次打開匯出選單都重新預設成「目前畫面上顯示（已套用只顯示關鍵路徑篩選）
-// 任務」的最早開始～最晚完成，Ni 可以在這裡手動再調整。跟 exportGanttHtml() 實際拿來畫圖的那組任務
+// v74: 甘特圖匯出起訖日期——打開匯出選單時，用「目前畫面上顯示（已套用只顯示關鍵路徑篩選）任務」的
+// 最早開始～最晚完成當預設值，Ni 可以在這裡手動再調整。跟 exportGanttHtml() 實際拿來畫圖的那組任務
 // （visibleRows() + critOnly 篩選）完全同一套邏輯，確保預設值跟「目前畫面上看到的」一致。
 function exportGanttVisibleDateRange(){
   const critOnlyEl = document.getElementById('critOnly');
@@ -5113,20 +5154,34 @@ function exportGanttVisibleDateRange(){
   if(!starts.length || !ends.length) return null;
   return { start: new Date(Math.min(...starts)), end: new Date(Math.max(...ends)) };
 }
-function prefillExportGanttDateRange(){
+// v75: Ni 回報每次重新打開匯出選單，手動調整過的起訖日期就被蓋回預設值，希望「保留調整後的日期，
+// 除非我重新篩選」。做法：記住「上一次套用的預設範圍」（exportGanttDefaultRangeCache），每次打開選單
+// 都重新算一次目前該有的預設範圍——如果跟上次套用的預設範圍一樣（代表畫面上的篩選條件、任務集合都沒
+// 變，不是「重新篩選」），就完全不去動欄位，保留 Ni 手動調整過的值（即使他調整成跟預設不一樣，或甚至
+// 清空兩欄位）；如果算出來的新預設範圍跟上次不一樣（代表真的改了篩選，像是勾/取消只顯示關鍵路徑、
+// 用列顯示隱藏/恢復了任務），才覆寫回新的預設值。
+let exportGanttDefaultRangeCache = null; // { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } | null
+function prefillExportGanttDateRangeIfFilterChanged(){
   const startEl = document.getElementById('exportGanttStartDate');
   const endEl = document.getElementById('exportGanttEndDate');
   if(!startEl || !endEl) return;
   const range = exportGanttVisibleDateRange();
-  startEl.value = range ? isoDate(range.start) : '';
-  endEl.value = range ? isoDate(range.end) : '';
+  const newDefault = { start: range ? isoDate(range.start) : '', end: range ? isoDate(range.end) : '' };
+  const filterChanged = !exportGanttDefaultRangeCache
+    || exportGanttDefaultRangeCache.start !== newDefault.start
+    || exportGanttDefaultRangeCache.end !== newDefault.end;
+  if(filterChanged){
+    startEl.value = newDefault.start;
+    endEl.value = newDefault.end;
+  }
+  exportGanttDefaultRangeCache = newDefault;
 }
 function toggleExportMenu(e){
   e.stopPropagation();
   const menu = document.getElementById('exportMenu');
   const opening = menu.style.display !== 'block';
   menu.style.display = opening ? 'block' : 'none';
-  if(opening) prefillExportGanttDateRange();
+  if(opening) prefillExportGanttDateRangeIfFilterChanged();
 }
 function closeExportMenu(){
   const menu = document.getElementById('exportMenu');
@@ -5799,6 +5854,7 @@ function enterProject(id){
   // widths/zoom/sort/collapse-state into this one (see resetColumnLayoutToDefaults/resetUiStateToDefaults)
   resetColumnLayoutToDefaults();
   resetUiStateToDefaults();
+  exportGanttDefaultRangeCache = null; // v75: 換專案時，匯出起訖日期的「上次預設值」快取也要歸零，不然切換專案後第一次打開匯出選單可能誤判成「沒有重新篩選」而沿用上一個專案的舊日期
   const known = projects.find(p=>p.id===currentProjectId);
   if(known && known.name && projectsFromRegistry){
     // v專案改名同步：改名現在會同步寫回後端的「專案」註冊表，所以只要讀得到真正的註冊表資料，
