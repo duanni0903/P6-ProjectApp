@@ -503,6 +503,14 @@
           <input type="number" id="exportFontSize" value="100" min="50" max="200" step="5" style="width:60px;">%
         </label>
         <button type="button" class="export-menu-item" onclick="exportToPdf()">📄 匯出 PDF（僅任務表）</button>
+        <label class="export-menu-paper-size">甘特圖起訖日期
+          <span style="display:flex; align-items:center; gap:3px;">
+            <input type="date" id="exportGanttStartDate" style="font-size:11px; padding:2px; border-radius:5px; border:1px solid var(--border-dark); font-family:inherit; width:118px;">
+            ～
+            <input type="date" id="exportGanttEndDate" style="font-size:11px; padding:2px; border-radius:5px; border:1px solid var(--border-dark); font-family:inherit; width:118px;">
+          </span>
+        </label>
+        <div class="hint" style="margin:0 8px 6px; max-width:240px; white-space:normal;">只影響下面「匯出 PDF（含甘特圖）」：預設是目前畫面上顯示任務的起訖範圍，可以自己調整；超出範圍的時間軸不會畫出來（任務清單不受影響）。兩個欄位都清空再匯出＝還原成完整範圍。</div>
         <button type="button" class="export-menu-item" onclick="exportToPdfWithGantt()">📈 匯出 PDF（含甘特圖）</button>
         <div class="export-menu-divider"></div>
         <label class="export-menu-paper-size">里程碑圖樣式
@@ -2714,6 +2722,15 @@ function succRefText(t){
   }).join('、');
 }
 
+// v74: 母/上層任務本身沒有自己輸入的工期（它的時間範圍是底下子任務 rollup() 彙總出來的），但 Ni 希望
+// 上層任務的「工期」欄位也能顯示一個數字，而不是空白——這裡用它已經彙總好的預估開始/預估完成
+// (t.startDate/t.endDate，rollup() 裡設的 min/max) 反推天數，跟「工期 1 天＝開始完成同一天」、
+// 「實際工期」用的算法完全一致（頭尾都算，+1），純粹顯示用，不是一個可編輯的輸入值，子任務異動時會
+// 自動跟著重新算。
+function summaryDurationDays(t){
+  if(!t.startDate || !t.endDate) return '';
+  return Math.max(1, Math.round((t.endDate - t.startDate) / 86400000) + 1);
+}
 // renders one <td> for a given column key + task row; kept in sync with renderTableHeader()'s
 // column list so header/body columns always line up regardless of current order/visibility
 function colTdHtml(key, t, isSum, depth, arrow, diff){
@@ -2746,7 +2763,7 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'baselineStart': return `<td>${isSum?'':fmtIsoRoc(t.baselineStart)}</td>`;
     case 'baselineEnd': return `<td>${isSum?'':fmtIsoRoc(t.baselineEnd)}</td>`;
     case 'dur': {
-      if(isSum) return '<td></td>';
+      if(isSum) return `<td title="彙總底下子任務的預估開始/預估完成算出來的天數，不是可直接輸入的欄位">${summaryDurationDays(t)}</td>`;
       if(t.milestone) return `<td title="里程碑工期固定為 0 天">${t.duration}</td>`; // fixed at 0, not directly editable
       return `<td class="editable-dur" onclick="startDurEdit(event, '${t.id}')" title="點一下可直接修改工期">${t.duration}</td>`;
     }
@@ -4471,7 +4488,7 @@ function cellCopyValue(key, t){
     case 'actualDur': return (isSum || t.actualDuration==null) ? '' : String(t.actualDuration);
     case 'baselineStart': return isSum ? '' : fmtIsoRoc(t.baselineStart);
     case 'baselineEnd': return isSum ? '' : fmtIsoRoc(t.baselineEnd);
-    case 'dur': return isSum ? '' : String(t.duration!=null ? t.duration : '');
+    case 'dur': return isSum ? String(summaryDurationDays(t)) : String(t.duration!=null ? t.duration : '');
     case 'float': return isSum ? '' : String(t.float||0);
     case 'progress': return String(t.progress!=null ? t.progress : 0);
     case 'budget': return String(t.budget||0);
@@ -4695,13 +4712,35 @@ function exportGanttHtml(){
   const wrapHtml = document.getElementById('ganttWrap').innerHTML;
   const svgMatches = wrapHtml.match(/<svg[\s\S]*?<\/svg>/g);
   const svgHtml = svgMatches ? svgMatches.join('') : wrapHtml;
+  // v74: 甘特圖匯出起訖日期——匯出選單裡兩個 <input type=date> 有填（且結束不早於開始）才會裁切；兩個
+  // header svg + body svg 是直接疊在一起（display:block，沒有縫隙），橫向位移同時套用在兩者上，
+  // 日期刻度跟任務列的 bar 永遠對得齊，這點不受影響。只是「畫面上看不看得到」的裁切，不影響任何任務
+  // 資料，也完全不影響左邊的任務清單欄位。
+  const ganttRange = exportGanttDateRangeOverride();
+  const ganttCellHtml = ganttRange
+    ? `<div style="flex:none; width:${ganttRange.widthPx}px; overflow:hidden;"><div style="margin-left:${-ganttRange.offsetPx}px;">${svgHtml}</div></div>`
+    : `<div style="flex:none;">${svgHtml}</div>`;
   return `<div style="display:flex; align-items:flex-start; font-size:${cellFontPx}px;">
     <div style="flex:none; width:${tableWidth}px; border-right:1px solid #999;">
       <div style="height:${headerH}px; box-sizing:border-box; border-bottom:1px solid #999; display:flex; align-items:center; font-weight:bold; background:#e5e7eb;">${headerCells}</div>
       ${bodyRows}
     </div>
-    <div style="flex:none;">${svgHtml}</div>
+    ${ganttCellHtml}
   </div>`;
+}
+// 讀匯出選單裡那兩個起訖日期欄位，換算成 renderGantt() 同一套座標系（xOfDate 用的 PROJECT_START +
+// ganttPxPerDay）下的裁切範圍；兩個欄位任一個空白、或結束日早於開始日，都當作「不裁切」處理，回傳 null
+// 讓 exportGanttHtml() 照舊輸出完整範圍。
+function exportGanttDateRangeOverride(){
+  const startEl = document.getElementById('exportGanttStartDate');
+  const endEl = document.getElementById('exportGanttEndDate');
+  const start = startEl && startEl.value ? parseIsoDateLocal(startEl.value) : null;
+  const end = endEl && endEl.value ? parseIsoDateLocal(endEl.value) : null;
+  if(!start || !end || end < start) return null;
+  const offsetPx = Math.max(0, Math.round((start - PROJECT_START) / 86400000) * ganttPxPerDay);
+  const days = Math.round((end - start) / 86400000) + 1;
+  const widthPx = Math.max(ganttPxPerDay, days * ganttPxPerDay);
+  return { offsetPx, widthPx };
 }
 // The Gantt SVG's shapes are styled entirely via CSS classes (.month-band, .bar-track, .arrow-path,
 // ...) defined in the main page's <style>, not inline attributes — copied verbatim here (plus the CSS
@@ -5062,10 +5101,32 @@ ${msLegendHtml(list.length + ' 個里程碑')}
   closeExportMenu();
 }
 
+// v74: 甘特圖匯出起訖日期——每次打開匯出選單都重新預設成「目前畫面上顯示（已套用只顯示關鍵路徑篩選）
+// 任務」的最早開始～最晚完成，Ni 可以在這裡手動再調整。跟 exportGanttHtml() 實際拿來畫圖的那組任務
+// （visibleRows() + critOnly 篩選）完全同一套邏輯，確保預設值跟「目前畫面上看到的」一致。
+function exportGanttVisibleDateRange(){
+  const critOnlyEl = document.getElementById('critOnly');
+  const critOnly = !!(critOnlyEl && critOnlyEl.checked);
+  const rows = visibleRows().filter(t=> !(critOnly && !t.critical));
+  const starts = rows.map(t=>t.startDate).filter(Boolean).map(d=>d.getTime());
+  const ends = rows.map(t=>t.endDate).filter(Boolean).map(d=>d.getTime());
+  if(!starts.length || !ends.length) return null;
+  return { start: new Date(Math.min(...starts)), end: new Date(Math.max(...ends)) };
+}
+function prefillExportGanttDateRange(){
+  const startEl = document.getElementById('exportGanttStartDate');
+  const endEl = document.getElementById('exportGanttEndDate');
+  if(!startEl || !endEl) return;
+  const range = exportGanttVisibleDateRange();
+  startEl.value = range ? isoDate(range.start) : '';
+  endEl.value = range ? isoDate(range.end) : '';
+}
 function toggleExportMenu(e){
   e.stopPropagation();
   const menu = document.getElementById('exportMenu');
-  menu.style.display = menu.style.display==='block' ? 'none' : 'block';
+  const opening = menu.style.display !== 'block';
+  menu.style.display = opening ? 'block' : 'none';
+  if(opening) prefillExportGanttDateRange();
 }
 function closeExportMenu(){
   const menu = document.getElementById('exportMenu');
