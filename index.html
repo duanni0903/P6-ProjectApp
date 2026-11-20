@@ -2742,18 +2742,24 @@ function summaryDurationDays(t){
 // 照樣被採計（min/max 只看「有填的」那些）。
 function summaryActualRange(t){
   const starts = [], finishes = [];
+  let leafCount = 0;
   (function walk(parentId){
     tasks.filter(x=>x.parent===parentId).forEach(k=>{
       if(hasKids(k)) walk(k.id);
       else {
+        leafCount++;
         if(k.actualStart) starts.push(k.actualStart);
         if(k.actualFinish) finishes.push(k.actualFinish);
       }
     });
   })(t.id);
+  // 實際開始：只要有任何子任務開工就算開始了，取最早的那個就好。
+  // 實際完成：母任務要「全部子任務都完成」才算完成，只要還有任何一個子任務的實際完成是空的，
+  // 母任務就不該顯示完成日期（即使部分子任務已經填了完成日期）。
+  const allLeavesFinished = leafCount > 0 && finishes.length === leafCount;
   return {
     start: starts.length ? starts.reduce((a,b)=> a<b?a:b) : '', // 'YYYY-MM-DD' 字串排序即日期排序
-    finish: finishes.length ? finishes.reduce((a,b)=> a>b?a:b) : '',
+    finish: allLeavesFinished ? finishes.reduce((a,b)=> a>b?a:b) : '',
   };
 }
 function summaryActualDurationDays(t){
