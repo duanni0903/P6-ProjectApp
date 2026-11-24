@@ -521,8 +521,13 @@
           </select>
         </label>
         <button type="button" class="export-menu-item" onclick="exportMilestoneTimeline()" title="只列出勾選「設為里程碑」的任務，固定以 A3 橫向匯出">🏁 匯出里程碑時程圖（A3）</button>
+        <div class="export-menu-divider"></div>
+        <button type="button" class="export-menu-item" onclick="exportProjectBackup()" title="把目前專案的任務/負責人/起始日等設定，完整存成一個 JSON 檔，之後可以用「匯入專案備份」整個還原回這個時間點">📦 匯出專案備份（JSON）</button>
+        <button type="button" class="export-menu-item" onclick="triggerImportProjectBackup()" title="選一個先前用「匯出專案備份」存下來的 JSON 檔，整個覆蓋目前專案的任務資料（會先問一次確認）">📥 匯入專案備份（JSON）</button>
       </div>
     </div>
+    <input type="file" id="importBackupFileInput" accept="application/json,.json" style="display:none" onchange="handleImportProjectBackupFile(this)">
+
     <span class="hint" style="margin:0">拖曳欄位標題可調整順序 · 右鍵欄位標題可移動/隱藏</span>
     <div id="clipboardBar" style="display:none; align-items:center; gap:6px;">
       <span id="clipboardLabel" class="hint" style="margin:0;"></span>
@@ -5192,6 +5197,115 @@ function toggleExportMenu(e){
 function closeExportMenu(){
   const menu = document.getElementById('exportMenu');
   if(menu) menu.style.display = 'none';
+}
+
+/* ---------- v專案備份: 匯出/匯入整個專案(任務+負責人+起始日等設定)的 JSON 備份檔 ----------
+   跟上面既有的「匯出 Excel/PDF」不同——那些是給人看的報表，欄位是算好的結果，沒辦法再讀回來。
+   這裡匯出的是跟 Google Sheet 同步時完全一樣的「真正輸入欄位」(snapshotTasks()，不含工期/浮時等
+   computeSchedule() 每次都會重算的衍生值)，所以才能真的「匯入」回來、整個還原成存檔當下的狀態。
+   用途是本機備份/版本留存，不是取代 Google Sheet 同步——匯入後還是要自己按「💾 同步」才會真的寫回
+   Sheet，避免使用者誤以為選完檔案資料就已經存到雲端了。 */
+function exportProjectBackup(){
+  const backup = {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    projectId: currentProjectId,
+    projectName: projectName,
+    settings: {
+      startDate: isoDate(PROJECT_START),
+      dataDate: DATA_DATE ? isoDate(DATA_DATE) : '',
+      targetFinishDate: TARGET_FINISH_DATE ? isoDate(TARGET_FINISH_DATE) : '',
+    },
+    owners: owners,
+    tasks: snapshotTasks(),
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type:'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const d = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const safeName = (projectName || '專案').replace(/[\\/:*?"<>|]/g, '_');
+  a.href = url;
+  a.download = `P6備份_${safeName}_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  closeExportMenu();
+}
+function triggerImportProjectBackup(){
+  if(!requireEdit()) return;
+  closeExportMenu();
+  document.getElementById('importBackupFileInput').click();
+}
+function handleImportProjectBackupFile(input){
+  const file = input.files && input.files[0];
+  input.value = ''; // 清空，這樣下次選同一個檔名也還是會觸發 onchange
+  if(!file) return;
+  if(!requireEdit()) return;
+  const reader = new FileReader();
+  reader.onload = function(){
+    let backup;
+    try{ backup = JSON.parse(reader.result); }
+    catch(e){ alert('這個檔案不是有效的 JSON 備份檔，請確認選對檔案。'); return; }
+    if(!backup || !Array.isArray(backup.tasks)){
+      alert('這個檔案看起來不是本系統匯出的專案備份（缺少任務資料），已取消匯入。');
+      return;
+    }
+    const taskCount = backup.tasks.length;
+    const nameHint = backup.projectName ? `「${backup.projectName}」` : '';
+    let dateHint = '未知時間';
+    if(backup.exportedAt){
+      const dt = new Date(backup.exportedAt);
+      if(!isNaN(dt.getTime())) dateHint = dt.toLocaleString('zh-TW');
+    }
+    if(!confirm(`即將匯入備份${nameHint}\n匯出時間：${dateHint}\n共 ${taskCount} 筆任務\n\n這會整個覆蓋「目前專案」的所有任務資料與起始日等設定，匯入後請記得按「💾 同步」才會真的寫回 Google Sheet。確定要匯入嗎？`)) return;
+
+    const _pre = snapshotTasks();
+    tasks = backup.tasks.map(t => ({
+      ...t,
+      id: String(t.id),
+      parent: (t.parent===null || t.parent===undefined || t.parent==='') ? null : String(t.parent),
+      preds: (t.preds||[]).map(p => ({ ...p, id:String(p.id) })),
+    }));
+    normalizeTaskOrder();
+    idCounter = tasks.reduce((m,t) => {
+      const n = Number(t.id);
+      return (Number.isFinite(n) && String(n)===t.id) ? Math.max(m,n) : m;
+    }, 0);
+    owners = Array.isArray(backup.owners)
+      ? backup.owners.map(o => ({ name:String(o.name||''), contact:o.contact?String(o.contact):'', dept:o.dept?String(o.dept):'' })).filter(o=>o.name)
+      : [];
+
+    // 專案名稱也是備份內容的一部分，一樣要還原——做法跟點標題改名完全一樣(存本機覆寫 + 回寫後端)
+    if(backup.projectName && backup.projectName.trim() && backup.projectName.trim() !== projectName){
+      projectName = backup.projectName.trim();
+      applyProjectName();
+      saveProjectNameOverride(projectName);
+      syncProjectNameToBackend(projectName);
+    }
+
+    const s = backup.settings || {};
+    const startParsed = s.startDate ? parseIsoDateLocal(s.startDate) : null;
+    if(startParsed) setProjectStartAnchor(startParsed);
+    const dataDateParsed = s.dataDate ? parseIsoDateLocal(s.dataDate) : null;
+    DATA_DATE = dataDateParsed;
+    const targetFinishParsed = s.targetFinishDate ? parseIsoDateLocal(s.targetFinishDate) : null;
+    TARGET_FINISH_DATE = targetFinishParsed;
+
+    selectedId = null; clipboardId = null; multiSelectIds = [];
+    render();
+    pushUndoSnapshot(_pre); // 萬一匯錯檔，還能 Ctrl+Z 復原這一步（還沒按同步之前）
+
+    // 起始日/資料日期/完工日期是另外存在 Google Sheet「設定」分頁的，不是 syncToSheet() 送的 tasks
+    // payload的一部分，所以這裡額外補送——做法跟 ⚙️ 專案設定 對話框按下「套用」時完全一樣。
+    if(startParsed) syncProjectStartDateToBackend(s.startDate);
+    syncProjectDataDateToBackend(s.dataDate || '');
+    syncProjectTargetFinishDateToBackend(s.targetFinishDate || '');
+
+    alert(`已匯入備份${nameHint}，共 ${taskCount} 筆任務。別忘了點「💾 同步」把資料寫回 Google Sheet。`);
+  };
+  reader.readAsText(file);
 }
 document.addEventListener('click', function(e){
   const menu = document.getElementById('exportMenu');
