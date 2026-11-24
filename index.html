@@ -503,6 +503,7 @@
           <input type="number" id="exportFontSize" value="100" min="50" max="200" step="5" style="width:60px;">%
         </label>
         <button type="button" class="export-menu-item" onclick="exportToPdf()">📄 匯出 PDF（僅任務表）</button>
+        <button type="button" class="export-menu-item" onclick="exportToPdfWithGantt()">📈 匯出 PDF（含甘特圖）</button>
         <label class="export-menu-paper-size">甘特圖起訖日期
           <span style="display:flex; align-items:center; gap:3px;">
             <input type="date" id="exportGanttStartDate" style="font-size:11px; padding:2px; border-radius:5px; border:1px solid var(--border-dark); font-family:inherit; width:118px;">
@@ -510,8 +511,6 @@
             <input type="date" id="exportGanttEndDate" style="font-size:11px; padding:2px; border-radius:5px; border:1px solid var(--border-dark); font-family:inherit; width:118px;">
           </span>
         </label>
-        <div class="hint" style="margin:0 8px 6px; max-width:240px; white-space:normal;">只影響下面「匯出 PDF（含甘特圖）」：預設是目前畫面上顯示任務的起訖範圍，可以自己調整；超出範圍的時間軸不會畫出來（任務清單不受影響）。兩個欄位都清空再匯出＝還原成完整範圍。</div>
-        <button type="button" class="export-menu-item" onclick="exportToPdfWithGantt()">📈 匯出 PDF（含甘特圖）</button>
         <div class="export-menu-divider"></div>
         <label class="export-menu-paper-size">里程碑圖樣式
           <select id="msStyleSelect" title="A：水平時間軸／B：甘特圖風格／C：垂直清單">
