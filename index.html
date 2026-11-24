@@ -244,9 +244,13 @@
      name input, not a separate indent column, so renaming stays visually anchored to the WBS code). */
   .wbs-mgmt-modal{width:640px;}
   .wbs-mgmt-list{border:1px solid var(--border-dark); border-radius:7px; max-height:min(60vh,480px); overflow:auto; margin-bottom:10px;}
-  .wbs-mgmt-row{display:flex; align-items:center; gap:6px; padding:5px 8px; border-bottom:1px solid var(--border);}
+  .wbs-mgmt-row{display:flex; align-items:center; gap:6px; padding:5px 8px; border-bottom:1px solid var(--border); cursor:pointer;}
   .wbs-mgmt-row:last-child{border-bottom:none;}
   .wbs-mgmt-row.wbs-mgmt-summary{background:#f8fafc;}
+  /* 點一下任務列會套用這個 class，跟主表格選取某一列用的是同一套顏色(#dbeafe + 左右上下內縮的 primary
+     色邊框)，讓使用者在調整架構(升降階/排序)的過程中，就算列的位置跟 WBS 編號因為操作而改變，也能一眼
+     認出「我剛剛點的是哪一個任務」。!important 蓋掉 .wbs-mgmt-summary 自己的底色。 */
+  .wbs-mgmt-row.wbs-mgmt-row-selected{background:#dbeafe !important; box-shadow:inset 0 0 0 1.5px var(--primary);}
   .wbs-mgmt-code{flex:none; width:52px; color:var(--text-faint); font-variant-numeric:tabular-nums; font-size:11.5px; text-align:right; padding-right:2px;}
   .wbs-mgmt-name{flex:1; min-width:0; padding:5px 7px; border:1px solid var(--border-dark); border-radius:6px; font-size:12.5px; font-family:inherit; color:var(--text); box-sizing:border-box;}
   .wbs-mgmt-row.wbs-mgmt-summary .wbs-mgmt-name{font-weight:700;}
@@ -320,6 +324,8 @@
   .rel-col-lag{width:60px; flex:none;}
   .rel-col-remove{width:20px; flex:none;}
   .rel-col-jump{width:58px; flex:none;}
+  /* v79: 前置/後續任務清單裡加上該任務的預估開始/預估完成日期，方便不用跳過去看就知道時間點 */
+  .rel-col-date{width:60px; flex:none; font-variant-numeric:tabular-nums; text-align:center; white-space:nowrap; color:var(--text-dim);}
   .rel-type-select{width:52px; flex:none; border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 5px; font-family:inherit; background:#fff; color:var(--text);}
   .rel-lag-input{width:60px; flex:none; border:1px solid var(--border-dark); border-radius:6px; font-size:11.5px; padding:3px 6px; font-family:inherit;}
   .rel-remove{width:20px; flex:none; border:none; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 0; border-radius:5px; font-family:inherit; text-align:center;}
@@ -3524,6 +3530,10 @@ function relSortValue(key, x){ // x: {task, type, lag}
     case 'name': return x.task.name||'';
     case 'type': return x.type||'';
     case 'lag': return x.lag||0;
+    // v79: 預估開始/預估完成跟主表格的 forecastStart/forecastEnd 是同一組欄位(t.startDate/t.endDate)，
+    // 排序時沒有值的排最前面（跟主表格 sortValue() 對 Date 欄位的慣例一致：用 0 代表「沒有值」）。
+    case 'start': return x.task.startDate ? x.task.startDate.getTime() : 0;
+    case 'end': return x.task.endDate ? x.task.endDate.getTime() : 0;
     default: return '';
   }
 }
@@ -3541,6 +3551,8 @@ function relHeaderRowHtml(mode){
     <div class="rel-item-header">
       <span class="rel-wbs"></span>
       <span class="rel-name rel-col-sortable" onclick="sortRelColumn('${mode}','name')">任務名稱${icon('name')}</span>
+      <span class="rel-col-date rel-col-sortable" onclick="sortRelColumn('${mode}','start')">預估開始${icon('start')}</span>
+      <span class="rel-col-date rel-col-sortable" onclick="sortRelColumn('${mode}','end')">預估完成${icon('end')}</span>
       <span class="rel-col-jump"></span>
       <span class="rel-col-type rel-col-sortable" onclick="sortRelColumn('${mode}','type')">關係${icon('type')}</span>
       <span class="rel-col-lag rel-col-sortable" onclick="sortRelColumn('${mode}','lag')">Lag(D)${icon('lag')}</span>
@@ -3564,6 +3576,8 @@ function relRowHtml(mode, ownerId, x){
     <div class="rel-item">
       <span class="rel-wbs">${x.task.wbs}</span>
       <span class="rel-name" title="${x.task.name}">${x.task.name}</span>
+      <span class="rel-col-date" title="預估開始">${x.task.milestone ? '' : fmtROC(x.task.startDate)}</span>
+      <span class="rel-col-date" title="預估完成">${fmtROC(x.task.endDate)}</span>
       <button type="button" class="rel-jump-btn" title="跳到「${x.task.name}」這一列" onclick="jumpToTaskRow('${x.task.id}')">前往任務</button>
       <select class="rel-type-select" title="關係類型" onchange="setRelType('${taskId}','${predId}', this.value)">
         <option value="FS" ${x.type==='FS'?'selected':''}>FS</option>
@@ -5434,8 +5448,18 @@ function deleteOwnerFromMgmt(name){
   renderOwnerMgmtList();
 }
 /* ---------- v70: WBS 結構管理視窗 ---------- */
+// v78: 點一下某個任務列要有顏色，方便在用 ▲▼⬅➡ 調整架構時，就算該列因為升降階/排序而換了位置、
+// WBS 編號也跟著重新編號，還是能一眼認出剛剛點的是哪個任務——用 id 比對而不是用陣列索引，所以天生
+//就能跨越重新排序/重新編號繼續保持正確。每次打開視窗都重設成沒有選取，避免殘留上一次、甚至上一個
+// 專案的選取狀態。
+let wbsMgmtSelectedId = null;
+function selectWbsMgmtRow(id){
+  wbsMgmtSelectedId = id;
+  renderWbsMgmtList();
+}
 function openWbsMgmt(){
   if(!requireEdit()) return;
+  wbsMgmtSelectedId = null;
   renderWbsMgmtList();
   document.getElementById('wbsMgmtOverlay').classList.add('open');
 }
@@ -5470,18 +5494,19 @@ function renderWbsMgmtList(){
     const isLast = idx<0 || idx>=siblings.length-1;
     const summary = hasKids(t);
     const collapseArrow = summary
-      ? `<span class="wbs-mgmt-collapse-btn" title="${collapsed[t.id]?'展開子任務':'摺疊子任務'}" onclick="event.stopPropagation(); toggleCollapse('${t.id}'); renderWbsMgmtList();">${collapsed[t.id]?'▶':'▼'}</span>`
+      ? `<span class="wbs-mgmt-collapse-btn" title="${collapsed[t.id]?'展開子任務':'摺疊子任務'}" onclick="event.stopPropagation(); wbsMgmtSelectedId='${t.id}'; toggleCollapse('${t.id}'); renderWbsMgmtList();">${collapsed[t.id]?'▶':'▼'}</span>`
       : `<span class="wbs-mgmt-collapse-btn" style="visibility:hidden">▼</span>`;
+    const selected = t.id===wbsMgmtSelectedId;
     return `
-      <div class="wbs-mgmt-row${summary?' wbs-mgmt-summary':''}">
+      <div class="wbs-mgmt-row${summary?' wbs-mgmt-summary':''}${selected?' wbs-mgmt-row-selected':''}" onclick="selectWbsMgmtRow('${t.id}')">
         <span class="wbs-mgmt-code">${t.wbs||''}</span>
         <span style="flex:1; min-width:0; padding-left:${depth*18}px; display:flex; align-items:center;">${collapseArrow}<input type="text" class="wbs-mgmt-name" value="${escAttr(t.name)}"
-          onclick="event.stopPropagation()" onblur="commitWbsMgmtNameEdit(this,'${t.id}')" onkeydown="wbsMgmtNameKeydown(event,this)"></span>
+          onclick="event.stopPropagation(); wbsMgmtSelectedId='${t.id}';" onblur="commitWbsMgmtNameEdit(this,'${t.id}')" onkeydown="wbsMgmtNameKeydown(event,this)"></span>
         <span class="wbs-mgmt-btns">
-          <button type="button" class="wbs-mgmt-btn" ${isFirst?'disabled':''} title="在同層往上移一位" onclick="moveSiblingUp('${t.id}'); renderWbsMgmtList();">▲</button>
-          <button type="button" class="wbs-mgmt-btn" ${isLast?'disabled':''} title="在同層往下移一位" onclick="moveSiblingDown('${t.id}'); renderWbsMgmtList();">▼</button>
-          <button type="button" class="wbs-mgmt-btn" ${canOutdentOf(t)?'':'disabled'} title="降一階：退回上一層（可退回成主要任務）" onclick="outdentTask('${t.id}'); renderWbsMgmtList();">${OUTDENT_ICON}</button>
-          <button type="button" class="wbs-mgmt-btn" ${canIndentOf(t)?'':'disabled'} title="升一階：變成上一列的子任務" onclick="indentTask('${t.id}'); renderWbsMgmtList();">${INDENT_ICON}</button>
+          <button type="button" class="wbs-mgmt-btn" ${isFirst?'disabled':''} title="在同層往上移一位" onclick="wbsMgmtSelectedId='${t.id}'; moveSiblingUp('${t.id}'); renderWbsMgmtList();">▲</button>
+          <button type="button" class="wbs-mgmt-btn" ${isLast?'disabled':''} title="在同層往下移一位" onclick="wbsMgmtSelectedId='${t.id}'; moveSiblingDown('${t.id}'); renderWbsMgmtList();">▼</button>
+          <button type="button" class="wbs-mgmt-btn" ${canOutdentOf(t)?'':'disabled'} title="降一階：退回上一層（可退回成主要任務）" onclick="wbsMgmtSelectedId='${t.id}'; outdentTask('${t.id}'); renderWbsMgmtList();">${OUTDENT_ICON}</button>
+          <button type="button" class="wbs-mgmt-btn" ${canIndentOf(t)?'':'disabled'} title="升一階：變成上一列的子任務" onclick="wbsMgmtSelectedId='${t.id}'; indentTask('${t.id}'); renderWbsMgmtList();">${INDENT_ICON}</button>
         </span>
       </div>`;
   }).join('') : '<div class="rel-pick-empty">尚無任務</div>';
