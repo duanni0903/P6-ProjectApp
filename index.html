@@ -167,6 +167,11 @@
   .summary-bar-shape{fill:var(--summary-bar);}
   /* v66: 基準線 (baseline) bar — a thin muted bar under the live bar, frozen by 設定基準線 */
   .baseline-bar{fill:var(--grey-bar-fill); opacity:.65;}
+  /* v80: 趕工 (crash) bar — a thin bar mirrored above the live bar (baseline's bar sits below), showing
+     the alternate 趕工開始/趕工完成 schedule computed when a task has a 趕工工期 set. Hardcoded color
+     (not part of the customizable ganttStyles system, same as baseline above) — purple so it reads as a
+     clearly distinct "third" comparison line, never clashing with the status/milestone/critical palette. */
+  .crash-bar{fill:#9333ea; opacity:.75;}
   .arrow-path{fill:none; stroke:#94a3b8; stroke-width:1.2;}
   .arrow-path.crit{stroke:var(--gantt-critical); stroke-width:1.3;}
   .axis-text{font-size:10.5px; fill:var(--text-dim); font-family:inherit;}
@@ -589,6 +594,7 @@
     <div class="item"><span class="swatch diamond" id="legendMilestone" style="background:#d97706"></span> 里程碑</div>
     <div class="item"><span class="swatch" id="legendSummary" style="background:#334155"></span> 階段彙總</div>
     <div class="item"><span class="swatch" style="background:#94a3b8; opacity:.65; height:5px"></span> 基準線</div>
+    <div class="item"><span class="swatch" style="background:#9333ea; opacity:.75; height:5px"></span> 趕工</div>
     <div class="item"><button class="btn" id="legendColorBtn" onclick="openGanttColorDialog()" title="自訂甘特圖顏色" style="padding:2px 8px; font-size:11px; font-weight:600;">🎨 自訂顏色…</button></div>
   </div>
 
@@ -852,6 +858,12 @@
   <button onclick="openGanttColorDialog()">🎨 甘特圖顏色…</button>
   <button id="depLinesMenuItem" onclick="toggleDependencyLines()">☑ 顯示相依關係線</button>
   <button id="critHighlightMenuItem" onclick="toggleCriticalHighlight()">☑ 顯示要徑（紅色）</button>
+  <div class="export-menu-divider"></div>
+  <!-- v80: 桿狀顯示 — 三個可以同時勾選、疊加顯示的桿狀圖開關；基準/預計/趕工都可以任意組合顯示 -->
+  <div style="padding:4px 10px 2px; font-size:10.5px; font-weight:700; color:var(--text-dim);">桿狀顯示</div>
+  <button id="barDisplayBaselineItem" onclick="toggleShowBaselineBar()">☑ 基準</button>
+  <button id="barDisplayForecastItem" onclick="toggleShowForecast()">☑ 預計</button>
+  <button id="barDisplayCrashItem" onclick="toggleShowCrash()">☐ 趕工</button>
 </div>
 
 <div class="overlay" id="ganttColorOverlay">
@@ -1576,6 +1588,10 @@ function stripForSync(t){
     // field, never be recomputed/overwritten by computeSchedule() on a later load.
     actualStart: t.actualStart || '', actualFinish: t.actualFinish || '',
     baselineStart: t.baselineStart || '', baselineEnd: t.baselineEnd || '',
+    // v80: 趕工工期 — 真正的輸入欄位(使用者直接填的，不是算出來的)，null/undefined 代表「這個任務不
+    // 趕工」，跟 duration 不一樣的地方是它可以是空的——送 '' 讓 Google Sheet 那一格保持空白，而不是 0
+    // (0 會被誤讀成「趕工到 0 天」)。
+    crashDuration: (t.crashDuration==null ? '' : t.crashDuration),
     // report-only columns for the Google Sheet (P6-style Activity table) — the app never reads these
     // back as input, it always recomputes the full schedule from duration+preds+parent on load.
     // v計畫時程: earlyStart/earlyFinish now report the 計畫 (plan) dates, matching what "最早開始/最早完成"
@@ -1591,6 +1607,9 @@ function stripForSync(t){
     // forecastFinish above — t.actualDuration is null (not 0) when not both actual dates are filled in,
     // so `|| ''` sends an empty cell rather than a literal 0 for that case.
     actualDuration: t.actualDuration || '',
+    // v80: 趕工開始/趕工完成，同樣是 report-only — Code.gs 的 COLUMNS 白名單目前還不認得這兩個新欄位，
+    // 在那邊補上之前，送了也只是被忽略，不會報錯。
+    crashStart: isoDate(t.crashStartDate), crashFinish: isoDate(t.crashEndDate),
   };
 }
 /* ---------- v39: undo/redo history + manual-only sync ----------
@@ -1609,6 +1628,8 @@ function snapshotTasks(){
     // v66: 實際開始/實際完成日 (user input) + 基準線 startDate/endDate snapshot (set by setBaseline())
     actualStart: t.actualStart || '', actualFinish: t.actualFinish || '',
     baselineStart: t.baselineStart || '', baselineEnd: t.baselineEnd || '',
+    // v80: 趕工工期——同樣是真正的輸入欄位，漏了這個的話，設定/清除趕工工期後按復原會悄悄失效。
+    crashDuration: (t.crashDuration==null ? null : t.crashDuration),
     preds:(t.preds||[]).map(p=>({id:p.id, type:p.type, lag:p.lag||0})),
   }));
 }
@@ -1770,6 +1791,11 @@ async function loadFromSheet(){
         id: String(t.id),
         parent: (t.parent===null || t.parent===undefined || t.parent==='') ? null : String(t.parent),
         preds: (t.preds||[]).map(p=>({...p, id:String(p.id)})),
+        // v80: Google Sheet 傳回來的趕工工期可能是空字串(清除過)、數字、或整欄都還不存在(Code.gs 的
+        // COLUMNS 白名單還沒加這個欄位，undefined)——統一正規化成 null(不趕工)或一個正數，不要讓一個
+        // 空字串或 undefined 就這樣原封不動混進 t.crashDuration，導致後面 `t.crashDuration!=null` 的
+        // 判斷誤判。
+        crashDuration: (t.crashDuration==='' || t.crashDuration==null) ? null : (Number(t.crashDuration) || null),
       }));
       // v73: repair array order to match the real parent/child tree structure — see
       // normalizeTaskOrder()'s own comment for why this matters (older/legacy project data can have
@@ -1833,6 +1859,9 @@ const COLUMN_META = {
   actualDur:    {label:'實際工期', width:66},
   baselineStart: {label:'基準線開始', width:86},
   baselineEnd:   {label:'基準線完成', width:86},
+  crashDur:   {label:'趕工工期', width:66},
+  crashStart: {label:'趕工開始', width:80},
+  crashEnd:   {label:'趕工完成', width:80},
   dur:        {label:'工期',   width:38},
   float:      {label:'浮時',   width:48},
   progress:   {label:'進度',   width:82},
@@ -1851,7 +1880,7 @@ const ACTIONS_COL_WIDTH = 164;
 let columnOrder = Object.keys(COLUMN_META); // full order, visible + hidden interleaved
 // parentRef / milestoneFlag are already visible another way (tree indentation / ◆ icon on the name),
 // so they start hidden to avoid clutter — everything else backend-side is shown by default.
-let columnHidden = { parentRef:true, milestoneFlag:true, baselineStart:true, baselineEnd:true }; // key -> true when hidden; baseline 欄位預設隱藏（已有基準線比對功能可用 Gantt 圖上的「顯示基準線」勾選框呈現），需要的話可從 ▤ 列顯示 勾出來
+let columnHidden = { parentRef:true, milestoneFlag:true, baselineStart:true, baselineEnd:true, crashDur:true, crashStart:true, crashEnd:true }; // key -> true when hidden; baseline 欄位預設隱藏（已有基準線比對功能可用 Gantt 圖上的「顯示基準線」勾選框呈現），需要的話可從 ▤ 列顯示 勾出來；v80: 趕工 三欄比照基準線預設隱藏(多數專案一開始都不會用到這個進階功能)，需要時同樣從 ▤ 列顯示 勾出來
 function visibleColumns(){ return columnOrder.filter(k=>!columnHidden[k]); }
 // v多專案: hardcoded snapshots taken right here (before any localStorage load can mutate the vars
 // above), so switching projects can cleanly reset to these defaults before restoring the NEW project's
@@ -2479,6 +2508,52 @@ function computeSchedule(){
     t.planEF = t.planES + t.duration;
   });
 
+  // v80: 趕工 (crash) forward pass — a THIRD independent forward pass, same shape as the forecast pass
+  // above (same actualStart/actualFinish 鎖定/進行中 handling, same milestone fixed-date constraint) but
+  // wherever a task has 趕工工期(crashDuration) set AND it's shorter than its正常 duration, THAT shorter
+  // duration is used instead of t.duration — both for the CPM math and for the in-progress "剩餘工期"
+  // calc. Chains off pred.crashES/pred.crashEF (not pred.ES/pred.EF) so a crashed predecessor's time
+  // savings actually ripple forward into its successors; a task with no crashDuration set simply passes
+  // its normal duration through unchanged, so a project with nothing marked as crashable computes the
+  // exact same dates here as the forecast pass. Feeds ONLY the 趕工開始/趕工完成/趕工工期 WBS columns and
+  // the Gantt's optional 趕工 comparison bar (see renderGantt()) — never 關鍵路徑/浮時/最晚開始完成, which
+  // stay driven by the forecast pass's real ES/EF/LS/LF above.
+  order.forEach(t=>{
+    const effDur = (t.crashDuration!=null && t.crashDuration < t.duration) ? t.crashDuration : t.duration;
+    let es = 0;
+    (t.preds||[]).forEach(p=>{
+      const pred = byId[p.id]; if(!pred || pred.disabled) return;
+      const lag = p.lag||0;
+      let c;
+      switch(p.type){
+        case 'SS': c = pred.crashES + lag; break;
+        case 'FF': c = pred.crashEF + lag - effDur; break;
+        case 'SF': c = pred.crashES + lag - effDur; break;
+        default:   c = pred.crashEF + lag; // FS
+      }
+      es = Math.max(es, c);
+    });
+    if(t.milestone && t.constraintType==='fixed' && t.constraintDate){
+      const idx = dayIndexOfIsoDate(t.constraintDate);
+      if(idx!==null) es = idx;
+    }
+    const actualStartIdx = dayIndexOfIsoDate(t.actualStart);
+    const actualFinishIdx = dayIndexOfIsoDate(t.actualFinish);
+    if(actualFinishIdx!==null){
+      t.crashES = Math.max(0, actualStartIdx!==null ? actualStartIdx : actualFinishIdx);
+      t.crashEF = Math.max(t.crashES, actualFinishIdx);
+    } else if(actualStartIdx!==null){
+      const remaining = Math.max(0, Math.round(effDur * (1 - (t.progress||0)/100)));
+      t.crashES = Math.max(0, actualStartIdx);
+      t.crashEF = Math.max(t.crashES, Math.max(todayIdx, actualStartIdx) + remaining);
+    } else {
+      t.crashES = Math.max(0, es);
+      t.crashEF = t.crashES + effDur;
+    }
+    t.crashStartDate = PROJECT_DAY_LIST[t.crashES];
+    t.crashEndDate = PROJECT_DAY_LIST[Math.max(t.crashES, t.crashEF-1)];
+  });
+
   // successor links (with type/lag) for the backward pass
   const succLinks = {}; order.forEach(t=>succLinks[t.id]=[]);
   order.forEach(t=>{
@@ -2560,6 +2635,10 @@ function computeSchedule(){
     s.endDate = new Date(Math.max(...kids.map(k=>k.endDate.getTime())));
     s.planStartDate = new Date(Math.min(...kids.map(k=>k.planStartDate.getTime())));
     s.planEndDate = new Date(Math.max(...kids.map(k=>k.planEndDate.getTime())));
+    // v80: 趕工開始/趕工完成 跟最早開始/最早完成一樣，母任務看「所有」子任務（含停用的）的最早/最晚，
+    // 不特別排除——停用只是先別管它，不代表上層的趕工時程範圍該縮小。
+    s.crashStartDate = new Date(Math.min(...kids.map(k=>k.crashStartDate.getTime())));
+    s.crashEndDate = new Date(Math.max(...kids.map(k=>k.crashEndDate.getTime())));
     // v停用: 但「預算/實際/進度」這幾個統計數字，跟頂部統計卡片一樣要排除停用的子任務，否則一個暫停
     // 的子任務還是會灌進上層的預算/進度總和裡，跟「排除在統計之外」的要求矛盾。全部子任務都停用時
     // 退回 0（沒有東西可以加總），不要除以零。
@@ -2645,6 +2724,11 @@ function sortValue(key, t){
     case 'actualDur': return t.actualDuration||0;
     case 'baselineStart': return t.baselineStart || '';
     case 'baselineEnd': return t.baselineEnd || '';
+    // v80: 跟 dur/baseline/actual 幾個欄位一樣的慣例——sortedKids() 只對「全部都是葉節點」的同層任務
+    // 排序，母任務列從來不會真的被排序，所以這裡不用特別處理 isSum 分支。
+    case 'crashDur': return t.crashDuration==null ? 0 : t.crashDuration;
+    case 'crashStart': return t.crashStartDate ? t.crashStartDate.getTime() : 0;
+    case 'crashEnd': return t.crashEndDate ? t.crashEndDate.getTime() : 0;
     case 'dur': return t.duration||0;
     case 'float': return t.float||0;
     case 'progress': return t.progress||0;
@@ -2741,6 +2825,12 @@ function summaryDurationDays(t){
   if(!t.startDate || !t.endDate) return '';
   return Math.max(1, Math.round((t.endDate - t.startDate) / 86400000) + 1);
 }
+// v80: 母任務的「趕工工期」同樣是顯示時即時從 crashStartDate/crashEndDate(computeSchedule()裡 rollup()
+// 算好的) 算出來的天數，跟 summaryDurationDays 完全同一套算法，不是可以直接輸入的欄位。
+function summaryCrashDurationDays(t){
+  if(!t.crashStartDate || !t.crashEndDate) return '';
+  return Math.max(1, Math.round((t.crashEndDate - t.crashStartDate) / 86400000) + 1);
+}
 // v75: 母任務的「實際開始/實際完成/實際工期」原本永遠空白——這兩個實際日期只有葉節點會直接輸入，
 // rollup() 從來沒有把它們往上彙總過（跟 startDate/endDate/planStartDate/planEndDate 不一樣）。這裡
 // 用遞迴往下收集「整個子樹」所有葉節點（不管中間隔了幾層子母任務）已經填的實際開始/實際完成，取最早
@@ -2816,6 +2906,17 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     // 上多餘的隱藏，拿掉就對了，不需要額外計算。
     case 'baselineStart': return `<td>${fmtIsoRoc(t.baselineStart)}</td>`;
     case 'baselineEnd': return `<td>${fmtIsoRoc(t.baselineEnd)}</td>`;
+    // v80: 趕工工期——真正的輸入欄位，只有葉節點(非里程碑)能填；留空＝這個任務不趕工，照正常工期算。
+    // 趕工開始/趕工完成則是 computeSchedule() 算好、rollup() 也幫母任務彙總好的純顯示欄位，跟
+    // forecastStart/forecastEnd(預估開始/完成) 同一套「里程碑不顯示開始、只顯示完成」的慣例。
+    case 'crashDur': {
+      if(isSum) return `<td title="彙總底下子任務的趕工開始/趕工完成算出來的天數，不是可直接輸入的欄位">${summaryCrashDurationDays(t)}</td>`;
+      if(t.milestone) return `<td title="里程碑沒有趕工工期">-</td>`;
+      const v = t.crashDuration;
+      return `<td class="editable-dur" onclick="startCrashDurEdit(event, '${t.id}')" title="點一下可設定趕工工期（留空＝不趕工，照正常工期）">${v==null?'':v}</td>`;
+    }
+    case 'crashStart': return `<td>${t.milestone ? '' : fmtROC(t.crashStartDate)}</td>`;
+    case 'crashEnd': return `<td>${fmtROC(t.crashEndDate)}</td>`;
     case 'dur': {
       if(isSum) return `<td title="彙總底下子任務的預估開始/預估完成算出來的天數，不是可直接輸入的欄位">${summaryDurationDays(t)}</td>`;
       if(t.milestone) return `<td title="里程碑工期固定為 0 天">${t.duration}</td>`; // fixed at 0, not directly editable
@@ -2889,7 +2990,49 @@ function commitDurEdit(input, id){
   const t = tasks.find(x=>x.id===id);
   if(!t){ render(); return; }
   const v = Math.max(1, Math.round(Number(input.value)) || t.duration);
-  if(v !== t.duration){ const _pre = snapshotTasks(); t.duration = v; render(); pushUndoSnapshot(_pre); }
+  if(v !== t.duration){
+    const _pre = snapshotTasks();
+    t.duration = v;
+    // v80: 正常工期改小了，如果原本設定的趕工工期已經比新的正常工期還長(或一樣)，就沒有意義了——
+    // 直接跟著夾到新的工期，避免留著一個「趕工反而比正常還長/一樣」的失效狀態。
+    if(t.crashDuration!=null && t.crashDuration >= v) t.crashDuration = v>1 ? v-1 : null;
+    render(); pushUndoSnapshot(_pre);
+  }
+  else { render(); }
+}
+// v80: 趕工工期——跟 startDurEdit/commitDurEdit 完全同一套點一下直接編輯的互動模式，差別是這個欄位
+// 可以留空(=不趕工，照正常工期)，而且值不能大於等於正常工期(沒有意義：既然不會比較快，就不算趕工)。
+function startCrashDurEdit(e, id){
+  if(!requireEdit()) return;
+  e.stopPropagation();
+  const t = tasks.find(x=>x.id===id);
+  if(!t || hasKids(t) || t.milestone) return;
+  const td = e.currentTarget;
+  td.innerHTML = `<input type="number" min="1" step="1" max="${Math.max(1,t.duration-1)}" value="${t.crashDuration==null?'':t.crashDuration}" class="dur-edit-input" placeholder="不趕工"
+    onclick="event.stopPropagation()" onblur="commitCrashDurEdit(this,'${id}')" onkeydown="crashDurEditKeydown(event,this,'${id}')">`;
+  const inp = td.querySelector('input');
+  inp.focus(); inp.select();
+}
+function crashDurEditKeydown(e, input, id){
+  if(e.key==='Enter'){ input.blur(); }
+  else if(e.key==='Escape'){ input.dataset.cancelled = '1'; input.blur(); }
+}
+function commitCrashDurEdit(input, id){
+  if(input.dataset.cancelled==='1'){ render(); return; }
+  const t = tasks.find(x=>x.id===id);
+  if(!t){ render(); return; }
+  const raw = input.value.trim();
+  let v = null; // 空白＝不趕工
+  if(raw !== ''){
+    v = Math.max(1, Math.round(Number(raw)) || 1);
+    if(v >= t.duration){
+      alert('趕工工期必須比正常工期（目前 ' + t.duration + ' 天）還短，才有「趕工」的意義。\n請重新輸入，或留空取消趕工。');
+      render();
+      return;
+    }
+  }
+  const cur = t.crashDuration==null ? null : t.crashDuration;
+  if(v !== cur){ const _pre = snapshotTasks(); t.crashDuration = v; render(); pushUndoSnapshot(_pre); }
   else { render(); }
 }
 // quick inline edit for Activity ID — single click straight into a text box, same affordance as the
@@ -3959,6 +4102,65 @@ function toggleCriticalHighlight(){
   renderGantt();
 }
 
+// v80: 桿狀顯示 — 甘特圖右鍵選單新增「基準/預計/趕工」三個可以同時勾選(疊加)的桿狀圖開關，跟上面
+// 顯示相依關係線/顯示要徑完全同一套 global(不分專案) localStorage 持久化模式。
+// 「基準」沿用既有的 #showBaseline 核取方塊(工具列上的「顯示基準線」)當作唯一的真實狀態來源，這裡的
+// 選單項目只是另一個入口去切換同一個勾選框，避免兩套各自獨立、可能顯示不一致的狀態；「預計」(目前畫面
+// 一直都有的主要桿狀圖/彙總圖形/里程碑圖案) 預設開啟，「趕工」預設關閉(多數專案一開始都還沒設定任何
+// 趕工工期，顯示出來也只是空的疊圖，先關著比較不會造成困惑)。
+let ganttShowForecast = true;
+const GANTT_SHOW_FORECAST_KEY = 'p6lite_show_forecast_v1';
+function saveShowForecastPref(){
+  try{ localStorage.setItem(GANTT_SHOW_FORECAST_KEY, ganttShowForecast ? '1' : '0'); }
+  catch(err){ console.warn('無法儲存預計桿狀圖顯示設定', err); }
+}
+function loadShowForecastPref(){
+  try{
+    const raw = localStorage.getItem(GANTT_SHOW_FORECAST_KEY);
+    if(raw!==null) ganttShowForecast = raw === '1';
+  }catch(err){
+    console.warn('無法讀取預計桿狀圖顯示設定，使用預設值', err);
+  }
+}
+loadShowForecastPref();
+function toggleShowForecast(){
+  ganttShowForecast = !ganttShowForecast;
+  saveShowForecastPref();
+  hideGanttBarsMenu();
+  renderGantt();
+}
+
+let ganttShowCrash = false;
+const GANTT_SHOW_CRASH_KEY = 'p6lite_show_crash_v1';
+function saveShowCrashPref(){
+  try{ localStorage.setItem(GANTT_SHOW_CRASH_KEY, ganttShowCrash ? '1' : '0'); }
+  catch(err){ console.warn('無法儲存趕工桿狀圖顯示設定', err); }
+}
+function loadShowCrashPref(){
+  try{
+    const raw = localStorage.getItem(GANTT_SHOW_CRASH_KEY);
+    if(raw!==null) ganttShowCrash = raw === '1';
+  }catch(err){
+    console.warn('無法讀取趕工桿狀圖顯示設定，使用預設值', err);
+  }
+}
+loadShowCrashPref();
+function toggleShowCrash(){
+  ganttShowCrash = !ganttShowCrash;
+  saveShowCrashPref();
+  hideGanttBarsMenu();
+  renderGantt();
+}
+function toggleShowBaselineBar(){
+  // 「基準」刻意直接操作工具列既有的 #showBaseline 核取方塊，而不是另外維護一個變數——這樣不管從
+  // 工具列的勾選框、還是從這個右鍵選單點，兩邊看到的永遠是同一個狀態，不會兜不起來。
+  const el = document.getElementById('showBaseline');
+  if(el) el.checked = !el.checked;
+  saveUiState();
+  hideGanttBarsMenu();
+  render();
+}
+
 /* ---------- v40: Gantt bars right-click menu -> color customization dialog ---------- */
 function showGanttBarsMenu(e){
   e.preventDefault();
@@ -3967,6 +4169,15 @@ function showGanttBarsMenu(e){
   if(depItem) depItem.textContent = (ganttShowDependencyLines ? '☑' : '☐') + ' 顯示相依關係線';
   const critItem = document.getElementById('critHighlightMenuItem');
   if(critItem) critItem.textContent = (ganttShowCriticalHighlight ? '☑' : '☐') + ' 顯示要徑（紅色）';
+  // v80: 桿狀顯示 三個選項，開啟選單當下重新讀一次目前狀態（「基準」直接讀工具列的 #showBaseline
+  // 核取方塊，不是另外存一份）
+  const baselineBarItem = document.getElementById('barDisplayBaselineItem');
+  const showBaselineEl = document.getElementById('showBaseline');
+  if(baselineBarItem) baselineBarItem.textContent = ((showBaselineEl&&showBaselineEl.checked) ? '☑' : '☐') + ' 基準';
+  const forecastBarItem = document.getElementById('barDisplayForecastItem');
+  if(forecastBarItem) forecastBarItem.textContent = (ganttShowForecast ? '☑' : '☐') + ' 預計';
+  const crashBarItem = document.getElementById('barDisplayCrashItem');
+  if(crashBarItem) crashBarItem.textContent = (ganttShowCrash ? '☑' : '☐') + ' 趕工';
   const menu = document.getElementById('ganttBarsCtxMenu');
   menu.style.display = 'block';
   menu.style.left = e.clientX+'px';
@@ -4341,6 +4552,18 @@ function renderGantt(){
         rowSvg += `<rect class="baseline-bar" x="${bx0}" y="${cy+10}" width="${bw}" height="5" rx="2"></rect>`;
       }
     }
+    // v80: 趕工 (crash) 比對桿狀圖 — 跟基準線同樣的「每一列、不分任務型態都畫」畫法，鏡射畫在主桿狀圖
+    // 的上方（基準線在下方），兩條細桿永遠不會疊在一起；用的是 computeSchedule() 那套獨立的趕工 forward
+    // pass 算出來的 crashStartDate/crashEndDate（Date 物件，所以跟主桿狀圖一樣直接用 xOfDate()，不是
+    // dayIndexOfIsoDate() — 那是基準線專用，因為 baselineStart/End 存的是 ISO 字串）。
+    if(ganttShowCrash && t.crashStartDate && t.crashEndDate){
+      const cx0 = xOfDate(t.crashStartDate), cx1 = xOfDate(t.crashEndDate)+pxPerDay;
+      const cw = Math.max(3, cx1-cx0);
+      rowSvg += `<rect class="crash-bar" x="${cx0}" y="${cy-15}" width="${cw}" height="5" rx="2"></rect>`;
+    }
+    // v80: 「預計」桿狀圖開關 — 關掉時，母任務的彙總圖形/里程碑的菱形/一般任務的進度桿都整個不畫，只
+    // 留基準/趕工這兩條比對線（如果有開的話），方便只看「計畫 vs 趕工」而不被目前的實際排程擋住視線。
+    if(ganttShowForecast){
     if(hasKids(t)){
       const x0 = xOfDate(t.startDate), x1 = xOfDate(t.endDate)+pxPerDay;
       const sa = gcShapeAttrs('summary');
@@ -4384,6 +4607,7 @@ function renderGantt(){
         }
       }
     }
+    } // end ganttShowForecast
     // v停用: 停用的任務在甘特圖上整條（含基準線）都用半透明包起來，跟主表格的灰色列呼應——座標/
     // 形狀完全不變，只是外觀變淡；不影響任何互動（點擊/拖曳等邏輯都沒有針對它特別處理）。
     bars += t.disabled ? `<g opacity="0.35">${rowSvg}</g>` : rowSvg;
@@ -4553,6 +4777,13 @@ function cellCopyValue(key, t){
     }
     case 'baselineStart': return fmtIsoRoc(t.baselineStart);
     case 'baselineEnd': return fmtIsoRoc(t.baselineEnd);
+    case 'crashDur': {
+      if(isSum) return String(summaryCrashDurationDays(t));
+      if(t.milestone) return '';
+      return t.crashDuration==null ? '' : String(t.crashDuration);
+    }
+    case 'crashStart': return (t.crashStartDate && !t.milestone) ? fmtROC(t.crashStartDate) : '';
+    case 'crashEnd': return t.crashEndDate ? fmtROC(t.crashEndDate) : '';
     case 'dur': return isSum ? String(summaryDurationDays(t)) : String(t.duration!=null ? t.duration : '');
     case 'float': return isSum ? '' : String(t.float||0);
     case 'progress': return String(t.progress!=null ? t.progress : 0);
@@ -4825,6 +5056,7 @@ function ganttExportCss(){
   .bar-outline-crit{stroke:#dc2626; stroke-width:1.6;}
   .summary-bar-shape{fill:#334155;}
   .baseline-bar{fill:#94a3b8; opacity:.65;}
+  .crash-bar{fill:#9333ea; opacity:.75;}
   .arrow-path{fill:none; stroke:#94a3b8; stroke-width:1.2;}
   .arrow-path.crit{stroke:#dc2626; stroke-width:1.3;}
   .axis-text{font-size:${scaledFontPx(10.5)}px; fill:#64748b; font-family:inherit;}
