@@ -557,6 +557,11 @@
       <button id="eraROC" class="active" onclick="setEra('roc')">民國</button>
       <button id="eraAD" onclick="setEra('ad')">西元</button>
     </div>
+    <div class="zoombtns" title="切換工期類欄位（工期/浮時/實際工期/趕工工期）的顯示單位">
+      <button id="durUnitDay" class="active" onclick="setDurationUnit('day')">天</button>
+      <button id="durUnitWeek" onclick="setDurationUnit('week')">週</button>
+      <button id="durUnitMonth" onclick="setDurationUnit('month')">月</button>
+    </div>
     <div class="zoombtns">
       <button id="zoomDay" onclick="setZoom('day')">日檢視</button>
       <button id="zoomWeek" class="active" onclick="setZoom('week')">週檢視</button>
@@ -2016,6 +2021,29 @@ function setEra(e){
   saveUiState();
   render();
 }
+// v工期單位: 工期類欄位（工期/浮時/實際工期/趕工工期）的顯示單位——天/週/月，三個都用同一個全域
+// 切換，跟 calendarMode(民國/西元) 同一套「每個專案各自記住」的持久化模式（saveUiState/loadUiState/
+// resetUiStateToDefaults）。這純粹是「畫面怎麼呈現」的轉換，底層儲存值、CPM 排程計算、三態排序
+// （sortValue）一律還是用原始的「天」當單位——换算是單調的（除以固定常數），不會改變排序結果，不需要
+// 跟著改。1 週固定＝7天、1 個月固定＝30天（簡化換算，不是真正對齊日曆月份的天數），週/月模式下小數點
+// 取一位；「天」模式維持原本「純數字、不加單位文字」的顯示方式，確保預設狀態下畫面完全不變。
+let durationUnit = 'day'; // 'day' | 'week' | 'month'
+function fmtDurationUnit(days){
+  if(days==null || days==='') return '';
+  const n = Number(days);
+  if(!Number.isFinite(n)) return '';
+  if(durationUnit==='week') return (n/7).toFixed(1) + '週';
+  if(durationUnit==='month') return (n/30).toFixed(1) + '月';
+  return String(n);
+}
+function setDurationUnit(u){
+  durationUnit = u;
+  document.getElementById('durUnitDay').classList.toggle('active', u==='day');
+  document.getElementById('durUnitWeek').classList.toggle('active', u==='week');
+  document.getElementById('durUnitMonth').classList.toggle('active', u==='month');
+  saveUiState();
+  render();
+}
 function money(n){ return Number(n||0).toLocaleString('en-US'); }
 function escAttr(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); } // safe to drop into an HTML attribute like an <input value="">
 
@@ -2899,7 +2927,7 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     case 'actualFinish': return `<td>${isSum?fmtIsoRoc(summaryActualRange(t).finish):fmtIsoRoc(t.actualFinish)}</td>`;
     case 'actualDur': {
       const v = isSum ? summaryActualDurationDays(t) : t.actualDuration;
-      return `<td>${v==null?'':v}</td>`;
+      return `<td>${v==null?'':fmtDurationUnit(v)}</td>`;
     }
     // v75: 基準線開始/完成其實一直都有正確存值給母任務（setBaseline() 是對 tasks.forEach 全部任務下手，
     // 用的 t.planStartDate/planEndDate 本來就已經是 rollup() 彙總好的值）——這裡的 isSum 判斷純粹是畫面
@@ -2910,22 +2938,22 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     // 趕工開始/趕工完成則是 computeSchedule() 算好、rollup() 也幫母任務彙總好的純顯示欄位，跟
     // forecastStart/forecastEnd(預估開始/完成) 同一套「里程碑不顯示開始、只顯示完成」的慣例。
     case 'crashDur': {
-      if(isSum) return `<td title="彙總底下子任務的趕工開始/趕工完成算出來的天數，不是可直接輸入的欄位">${summaryCrashDurationDays(t)}</td>`;
+      if(isSum) return `<td title="彙總底下子任務的趕工開始/趕工完成算出來的天數，不是可直接輸入的欄位">${fmtDurationUnit(summaryCrashDurationDays(t))}</td>`;
       if(t.milestone) return `<td title="里程碑沒有趕工工期">-</td>`;
       const v = t.crashDuration;
-      return `<td class="editable-dur" onclick="startCrashDurEdit(event, '${t.id}')" title="點一下可設定趕工工期（留空＝不趕工，照正常工期）">${v==null?'':v}</td>`;
+      return `<td class="editable-dur" onclick="startCrashDurEdit(event, '${t.id}')" title="點一下可設定趕工工期（留空＝不趕工，照正常工期）">${v==null?'':fmtDurationUnit(v)}</td>`;
     }
     case 'crashStart': return `<td>${t.milestone ? '' : fmtROC(t.crashStartDate)}</td>`;
     case 'crashEnd': return `<td>${fmtROC(t.crashEndDate)}</td>`;
     case 'dur': {
-      if(isSum) return `<td title="彙總底下子任務的預估開始/預估完成算出來的天數，不是可直接輸入的欄位">${summaryDurationDays(t)}</td>`;
-      if(t.milestone) return `<td title="里程碑工期固定為 0 天">${t.duration}</td>`; // fixed at 0, not directly editable
-      return `<td class="editable-dur" onclick="startDurEdit(event, '${t.id}')" title="點一下可直接修改工期">${t.duration}</td>`;
+      if(isSum) return `<td title="彙總底下子任務的預估開始/預估完成算出來的天數，不是可直接輸入的欄位">${fmtDurationUnit(summaryDurationDays(t))}</td>`;
+      if(t.milestone) return `<td title="里程碑工期固定為 0 天">${fmtDurationUnit(t.duration)}</td>`; // fixed at 0, not directly editable
+      return `<td class="editable-dur" onclick="startDurEdit(event, '${t.id}')" title="點一下可直接修改工期">${fmtDurationUnit(t.duration)}</td>`;
     }
     case 'float': {
       if(isSum) return '<td></td>';
       const f = t.float||0;
-      return `<td${f<=0?' style="color:var(--danger); font-weight:700;"':''}>${f}</td>`;
+      return `<td${f<=0?' style="color:var(--danger); font-weight:700;"':''}>${fmtDurationUnit(f)}</td>`;
     }
     case 'progress': {
       const psk = progStyleKey(t.progress);
@@ -3266,7 +3294,7 @@ function saveUiState(){
     const showBaselineEl = document.getElementById('showBaseline');
     const showDataDateEl = document.getElementById('showDataDate');
     localStorage.setItem(storageKey(UI_STATE_STORAGE_KEY), JSON.stringify({
-      calendarMode, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride, boardHeightOverride,
+      calendarMode, durationUnit, ganttPxPerDay, sortColKey, sortDir, wbsPanelWidthOverride, boardHeightOverride,
       critOnly: critOnlyEl ? critOnlyEl.checked : false,
       showBaseline: showBaselineEl ? showBaselineEl.checked : true,
       showDataDate: showDataDateEl ? showDataDateEl.checked : true,
@@ -3285,6 +3313,7 @@ function loadUiState(){
     const saved = JSON.parse(raw);
     if(!saved || typeof saved !== 'object') return;
     if(saved.calendarMode === 'roc' || saved.calendarMode === 'ad') calendarMode = saved.calendarMode;
+    if(saved.durationUnit === 'day' || saved.durationUnit === 'week' || saved.durationUnit === 'month') durationUnit = saved.durationUnit;
     if(Number.isFinite(saved.ganttPxPerDay)) ganttPxPerDay = Math.min(GANTT_MAX_PX_PER_DAY, Math.max(GANTT_MIN_PX_PER_DAY, saved.ganttPxPerDay));
     if(typeof saved.sortColKey === 'string' || saved.sortColKey === null) sortColKey = saved.sortColKey;
     if(saved.sortDir === 0 || saved.sortDir === 1 || saved.sortDir === 2) sortDir = saved.sortDir;
@@ -3303,6 +3332,9 @@ function loadUiState(){
     if(showDataDateEl && typeof saved.showDataDate === 'boolean') showDataDateEl.checked = saved.showDataDate;
     document.getElementById('eraROC').classList.toggle('active', calendarMode==='roc');
     document.getElementById('eraAD').classList.toggle('active', calendarMode==='ad');
+    document.getElementById('durUnitDay').classList.toggle('active', durationUnit==='day');
+    document.getElementById('durUnitWeek').classList.toggle('active', durationUnit==='week');
+    document.getElementById('durUnitMonth').classList.toggle('active', durationUnit==='month');
     syncZoomButtonsActive();
   }catch(err){
     console.warn('無法還原介面顯示狀態', err);
@@ -3313,6 +3345,7 @@ function loadUiState(){
 // state — otherwise zoom/sort/collapse/etc from the previous project would leak into the next one.
 function resetUiStateToDefaults(){
   calendarMode = 'roc';
+  durationUnit = 'day';
   ganttPxPerDay = 20;
   sortColKey = null;
   sortDir = 0;
@@ -3329,6 +3362,9 @@ function resetUiStateToDefaults(){
   if(showDataDateEl) showDataDateEl.checked = true;
   document.getElementById('eraROC').classList.toggle('active', true);
   document.getElementById('eraAD').classList.toggle('active', false);
+  document.getElementById('durUnitDay').classList.toggle('active', true);
+  document.getElementById('durUnitWeek').classList.toggle('active', false);
+  document.getElementById('durUnitMonth').classList.toggle('active', false);
   syncZoomButtonsActive();
 }
 // v多專案: no longer called unconditionally at script load — enterProject() calls
@@ -4773,19 +4809,19 @@ function cellCopyValue(key, t){
     case 'actualFinish': return isSum ? fmtIsoRoc(summaryActualRange(t).finish) : fmtIsoRoc(t.actualFinish);
     case 'actualDur': {
       const v = isSum ? summaryActualDurationDays(t) : t.actualDuration;
-      return v==null ? '' : String(v);
+      return v==null ? '' : fmtDurationUnit(v);
     }
     case 'baselineStart': return fmtIsoRoc(t.baselineStart);
     case 'baselineEnd': return fmtIsoRoc(t.baselineEnd);
     case 'crashDur': {
-      if(isSum) return String(summaryCrashDurationDays(t));
+      if(isSum) return fmtDurationUnit(summaryCrashDurationDays(t));
       if(t.milestone) return '';
-      return t.crashDuration==null ? '' : String(t.crashDuration);
+      return t.crashDuration==null ? '' : fmtDurationUnit(t.crashDuration);
     }
     case 'crashStart': return (t.crashStartDate && !t.milestone) ? fmtROC(t.crashStartDate) : '';
     case 'crashEnd': return t.crashEndDate ? fmtROC(t.crashEndDate) : '';
-    case 'dur': return isSum ? String(summaryDurationDays(t)) : String(t.duration!=null ? t.duration : '');
-    case 'float': return isSum ? '' : String(t.float||0);
+    case 'dur': return isSum ? fmtDurationUnit(summaryDurationDays(t)) : fmtDurationUnit(t.duration!=null ? t.duration : '');
+    case 'float': return isSum ? '' : fmtDurationUnit(t.float||0);
     case 'progress': return String(t.progress!=null ? t.progress : 0);
     case 'budget': return String(t.budget||0);
     case 'actual': return String(t.actual||0);
