@@ -4878,10 +4878,12 @@ function flashCellSelectionCopied(){
 /* ---------- v49: export the full task list to Excel (.xls) or PDF ----------
    Both exports share one plain <table> built from the SAME per-column values used for the v48
    Ctrl+C copy (cellCopyValue), so what you see is exactly what gets exported — not a DOM scrape.
-   Unlike the on-screen table, the export always includes every task regardless of collapsed state,
-   since "匯出" is expected to produce the complete task list, not just whatever's currently expanded.
-   v60: a row explicitly hidden via the row-hide checkbox IS excluded here (and cascades to its
-   descendants) — unlike collapsed[], hiding a row is meant to keep it out of every export too. */
+   v82: per user request ("如果任務有摺疊子任務，匯出時也要比照"), this now respects collapsed[] the
+   same way the on-screen WBS table (visibleRows()) and the「匯出PDF（含甘特圖）」export (which already
+   reused visibleRows()) do — a task you've folded away on screen is folded away in the plain-table PDF/
+   Excel export too, not silently expanded back out. v60: a row explicitly hidden via the row-hide
+   checkbox IS still excluded here (and cascades to its descendants) regardless of collapsed state —
+   hiding a row is a stronger/separate "keep it out of everything" signal than merely collapsing it. */
 function exportRowsFlat(){
   const rows = [];
   function walk(parentId, depth){
@@ -4889,7 +4891,7 @@ function exportRowsFlat(){
     kids.forEach(t=>{
       if(hiddenIds[t.id]) return; // v60: hidden — skip the row itself AND everything under it
       rows.push({ task: t, depth });
-      if(hasKids(t)) walk(t.id, depth+1); // ignore collapsed[] — export is always the full tree (except hidden rows, above)
+      if(hasKids(t) && !collapsed[t.id]) walk(t.id, depth+1); // v82: now matches visibleRows()'s collapsed[] check
     });
   }
   walk(null, 0);
