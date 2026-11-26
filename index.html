@@ -2938,10 +2938,20 @@ function colTdHtml(key, t, isSum, depth, arrow, diff){
     // 趕工開始/趕工完成則是 computeSchedule() 算好、rollup() 也幫母任務彙總好的純顯示欄位，跟
     // forecastStart/forecastEnd(預估開始/完成) 同一套「里程碑不顯示開始、只顯示完成」的慣例。
     case 'crashDur': {
-      if(isSum) return `<td title="彙總底下子任務的趕工開始/趕工完成算出來的天數，不是可直接輸入的欄位">${fmtDurationUnit(summaryCrashDurationDays(t))}</td>`;
+      // v83: 趕工工期有設定值時用紅色字體呈現，跟浮時<=0的既有紅字慣例一樣，純畫面視覺提示——不影響
+      // 複製/Excel/PDF匯出（cellCopyValue 維持純文字，沒有顏色），匯出本來就是給人看的純表格報表。
+      if(isSum){
+        const sv = summaryCrashDurationDays(t);
+        // 注意：完全沒有設定任何趕工工期時，趕工pass算出來的日期會跟預估pass一模一樣（v80的既有設計：
+        // 不趕工＝維持原狀），所以 summaryCrashDurationDays(t) 永遠會有值，不能單憑「不是空字串」就判斷
+        // 子樹底下真的有在趕工——要拿它跟彙總後的「正常工期」比較，真的比較短才代表這個子樹底下確實有
+        // 任務被設定趕工、天數有實際縮短，才該標紅字；兩者相等（沒人趕工）就跟平常一樣不特別標示。
+        const isActuallyCrashed = sv !== '' && sv < summaryDurationDays(t);
+        return `<td title="彙總底下子任務的趕工開始/趕工完成算出來的天數，不是可直接輸入的欄位"${isActuallyCrashed?' style="color:var(--danger);"':''}>${fmtDurationUnit(sv)}</td>`;
+      }
       if(t.milestone) return `<td title="里程碑沒有趕工工期">-</td>`;
       const v = t.crashDuration;
-      return `<td class="editable-dur" onclick="startCrashDurEdit(event, '${t.id}')" title="點一下可設定趕工工期（留空＝不趕工，照正常工期）">${v==null?'':fmtDurationUnit(v)}</td>`;
+      return `<td class="editable-dur" onclick="startCrashDurEdit(event, '${t.id}')" title="點一下可設定趕工工期（留空＝不趕工，照正常工期）"${v!=null?' style="color:var(--danger);"':''}>${v==null?'':fmtDurationUnit(v)}</td>`;
     }
     case 'crashStart': return `<td>${t.milestone ? '' : fmtROC(t.crashStartDate)}</td>`;
     case 'crashEnd': return `<td>${fmtROC(t.crashEndDate)}</td>`;
